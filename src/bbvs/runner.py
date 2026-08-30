@@ -94,6 +94,7 @@ def run_pipeline(source: str, settings: AppSettings, progress: Progress = print)
             ReportOptions(
                 include_transcript=settings.report.include_transcript,
                 max_images=settings.report.max_images,
+                expect_vision=settings.analysis.vision,
             ),
         )
     else:

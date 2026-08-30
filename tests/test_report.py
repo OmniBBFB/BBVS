@@ -84,3 +84,15 @@ def test_report_pairs_each_image_with_timestamped_bilingual_summary(tmp_path: Pa
     assert "The slide shows money demand." in document
     assert "幻灯片展示货币需求。" in document
     assert "00:00:42" in document
+
+
+def test_basic_report_does_not_warn_about_intentionally_disabled_vision(tmp_path: Path) -> None:
+    run = sample_run(tmp_path)
+    write_json(run / "analysis" / "summary.json", {"summary": "Done"})
+    write_json(run / "analysis" / "chapters.json", [{
+        "title": "Chapter", "start": 0, "end": 60, "summary": "Done", "key_points": [],
+    }])
+    write_json(run / "analysis" / "verified-transcript.json", {"segments": []})
+    document = build_html(run, ReportOptions(max_images=0, expect_vision=False))
+    assert "尚未运行" not in document
+    assert "视觉分析" not in document

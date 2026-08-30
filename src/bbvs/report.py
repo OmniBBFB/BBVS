@@ -15,6 +15,7 @@ from .io import read_json
 class ReportOptions:
     include_transcript: bool = False
     max_images: int = 12
+    expect_vision: bool = True
 
 
 class PdfRenderer(Protocol):
@@ -150,11 +151,13 @@ def build_html(run_dir: Path, options: ReportOptions = ReportOptions()) -> str:
     terms = _load(analysis / "terminology.json", [])
     corrections = _load(analysis / "corrections.json", [])
     timeline = _load(analysis / "timeline.json", [])
-    missing = [name for name, present in (
+    expected_stages = [
         ("全局摘要", bool(summary)), ("章节摘要", bool(chapters)),
-        ("视觉分析", (analysis / "visual-analysis.json").exists()),
         ("转录校正", (analysis / "verified-transcript.json").exists()),
-    ) if not present]
+    ]
+    if options.expect_vision:
+        expected_stages.append(("视觉分析", (analysis / "visual-analysis.json").exists()))
+    missing = [name for name, present in expected_stages if not present]
     url = str(metadata.get("webpage_url", ""))
     duration = metadata.get("duration") or (timeline[-1]["end"] if timeline else 0)
     tags = "".join(f'<span class="badge">{_text(tag)}</span>' for tag in metadata.get("tags", []))

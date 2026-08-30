@@ -54,6 +54,9 @@ class OpenAICompatibleClient:
     api_key: str = "EMPTY"
     timeout: float = 120.0
 
+    def _provider_body(self, extra_body: dict[str, Any] | None) -> dict[str, Any]:
+        return dict(extra_body or {})
+
     def chat(
         self, *, model: str, messages: list[Message], temperature: float = 0.0,
         max_tokens: int = 2048, response_format: dict[str, Any] | None = None,
@@ -65,8 +68,7 @@ class OpenAICompatibleClient:
         }
         if response_format is not None:
             payload["response_format"] = response_format
-        if extra_body:
-            payload.update(extra_body)
+        payload.update(self._provider_body(extra_body))
         result = _request_json(
             self.base_url.rstrip("/") + "/chat/completions", payload, self.api_key, self.timeout
         )
@@ -78,6 +80,33 @@ class OpenAICompatibleClient:
     def chat_json(self, **kwargs: Any) -> Any:
         kwargs.setdefault("response_format", {"type": "json_object"})
         return parse_json_content(self.chat(**kwargs))
+
+
+class DeepSeekCompatibleClient(OpenAICompatibleClient):
+    """OpenAI-compatible chat adapter that translates DeepSeek-specific options."""
+
+    def _provider_body(self, extra_body: dict[str, Any] | None) -> dict[str, Any]:
+        body = dict(extra_body or {})
+        template = body.pop("chat_template_kwargs", None)
+        if isinstance(template, dict) and "enable_thinking" in template:
+            body["thinking"] = {
+                "type": "enabled" if template["enable_thinking"] else "disabled"
+            }
+        elif "reasoning_effort" in body:
+            body["thinking"] = {"type": "enabled"}
+        return body
+
+
+def create_chat_client(endpoint: Any) -> OpenAICompatibleClient:
+    providers = {
+        "openai": OpenAICompatibleClient,
+        "deepseek": DeepSeekCompatibleClient,
+    }
+    try:
+        client_type = providers[endpoint.provider.casefold()]
+    except KeyError as exc:
+        raise ValueError(f"不支持的 LLM provider: {endpoint.provider}") from exc
+    return client_type(endpoint.base_url, endpoint.api_key, endpoint.timeout)
 
 
 @dataclass(slots=True)

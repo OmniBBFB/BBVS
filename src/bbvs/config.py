@@ -14,6 +14,7 @@ class Endpoint:
     model: str
     api_key: str = "EMPTY"
     timeout: float = 120.0
+    provider: str = "openai"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,7 @@ class Services:
                 model=model,
                 api_key=os.environ.get(prefix + "API_KEY", item.get("api_key", "EMPTY")),
                 timeout=float(os.environ.get(prefix + "TIMEOUT", item.get("timeout", 120))),
+                provider=os.environ.get(prefix + "PROVIDER", item.get("provider", "openai")),
             )
 
         return cls(

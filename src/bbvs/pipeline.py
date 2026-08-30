@@ -5,8 +5,8 @@ from pathlib import Path
 
 from .config import Services
 from .io import read_json, write_json
-from .llm import EmbeddingClient, OpenAICompatibleClient, RerankerClient
-from .models import Chapter, Evidence, Frame, Term, TimelineSegment, Transcript, VisualAnalysis
+from .llm import EmbeddingClient, RerankerClient, create_chat_client
+from .models import Chapter, Correction, Evidence, Frame, Term, TimelineSegment, Transcript, VisualAnalysis
 from .summarize import summarize_timeline
 from .terminology import discover_terms
 from .timeline import build_timeline
@@ -30,9 +30,9 @@ def _chapters(payload: list[dict]) -> list[Chapter]:
 class VideoPipeline:
     def __init__(self, services: Services):
         self.services = services
-        self.llm = OpenAICompatibleClient(services.llm.base_url, services.llm.api_key, services.llm.timeout)
+        self.llm = create_chat_client(services.llm)
         self.vlm = (
-            OpenAICompatibleClient(services.vlm.base_url, services.vlm.api_key, services.vlm.timeout)
+            create_chat_client(services.vlm)
             if services.vlm else None
         )
         self.embedding = (
@@ -64,7 +64,22 @@ class VideoPipeline:
             if verified_path.exists():
                 transcript = from_dict(read_json(verified_path))
             else:
-                transcript, corrections = verify_transcript(transcript, terms, self.llm, self.services.llm.model)
+                progress_path = analysis_dir / "verification-progress.json"
+                progress = read_json(progress_path) if progress_path.exists() else {}
+                existing_corrections = [Correction(**row) for row in progress.get("corrections", [])]
+
+                def save_verification_progress(processed: int, rows: list[Correction]) -> None:
+                    write_json(progress_path, {
+                        "processed_suspects": processed,
+                        "corrections": [asdict(row) for row in rows],
+                    })
+
+                transcript, corrections = verify_transcript(
+                    transcript, terms, self.llm, self.services.llm.model,
+                    processed_suspects=int(progress.get("processed_suspects", 0)),
+                    existing_corrections=existing_corrections,
+                    checkpoint=save_verification_progress,
+                )
                 write_json(verified_path, asdict(transcript))
                 write_json(analysis_dir / "corrections.json", [asdict(row) for row in corrections])
 
@@ -87,15 +102,31 @@ class VideoPipeline:
         write_json(analysis_dir / "timeline.json", [asdict(row) for row in timeline])
         if summarize:
             summary_path = analysis_dir / "summary.json"
-            if not summary_path.exists():
+            summary_mode_path = analysis_dir / "summary-mode.json"
+            chinese_source = (transcript.language or "").casefold().startswith(("zh", "cmn", "yue"))
+            expected_mode = {
+                "source_language": transcript.language,
+                "translation_mode": "monolingual" if chinese_source else "bilingual_zh",
+            }
+            cached_summary = read_json(summary_path) if summary_path.exists() else {}
+            summary_current = all(cached_summary.get(key) == value for key, value in expected_mode.items())
+            if not summary_current:
                 chapters_path = analysis_dir / "chapters.json"
-                existing = _chapters(read_json(chapters_path)) if chapters_path.exists() else []
-                if existing and not all(row.summary_zh for row in existing):
+                saved_mode = read_json(summary_mode_path) if summary_mode_path.exists() else {}
+                mode_current = saved_mode == expected_mode
+                existing = _chapters(read_json(chapters_path)) if chapters_path.exists() and mode_current else []
+                valid_existing = (
+                    all(not row.summary_zh and not row.title_zh and not row.key_points_zh for row in existing)
+                    if chinese_source else all(row.summary_zh for row in existing)
+                )
+                if existing and not valid_existing:
                     existing = []
                 save_chapters = lambda rows: write_json(chapters_path, [asdict(row) for row in rows])
+                write_json(summary_mode_path, expected_mode)
                 chapters, report = summarize_timeline(
                     timeline, self.llm, self.services.llm.model,
                     existing_chapters=existing, checkpoint=save_chapters,
+                    source_language=transcript.language,
                 )
                 save_chapters(chapters)
                 write_json(summary_path, report)

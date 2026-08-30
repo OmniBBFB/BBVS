@@ -8,6 +8,12 @@
 
 默认配置使用 `config/config.yaml`。它会依次完成下载、音频、关键帧、OCR、ASR、LLM 分析和 PDF：
 
+首次使用先复制本地配置；`config/config.yaml` 已被 Git 忽略，可以保存本地 API Key：
+
+```bash
+cp config/config.yaml.example config/config.yaml
+```
+
 ```bash
 uv run bbvs run 'VIDEO_URL'
 ```
@@ -129,6 +135,8 @@ ASR 和 OCR 的调用方只依赖各自的小型 interface。内置 adapter：
 模型及流水线配置默认位于 `config/config.yaml`；全功能示例为 `config/config-full.yaml`。也可用环境变量覆盖，例如
 `BBVS_LLM_BASE_URL`、`BBVS_LLM_MODEL` 和 `BBVS_LLM_API_KEY`。
 
+`services.llm.provider` 支持 `openai`（OpenAI-compatible/vLLM）和 `deepseek`。DeepSeek adapter 会把流水线中的思考开关转换为 DeepSeek 的 `thinking` 参数；示例见 `config/config.yaml.example`。
+
 已有下载、ASR、OCR 产物后，先生成术语和多模态 Timeline：
 
 ```bash
@@ -164,7 +172,7 @@ uv run bbvs asr 'RUN_DIR/audio.wav' \
   --engine faster-whisper --model small --device auto \
   --output 'RUN_DIR/asr-faster-whisper-small.json'
 
-# 只有 LLM：术语、ASR 校验、时间轴、双语总结；不传 --vision
+# 只有 LLM：术语、ASR 校验、时间轴、语言感知总结；不传 --vision
 uv run bbvs analyze 'RUN_DIR' --services config/config.yaml \
   --verify --summarize
 
@@ -172,7 +180,7 @@ uv run bbvs export-report 'RUN_DIR' \
   --output 'RUN_DIR/final-report-basic.pdf' --include-transcript
 ```
 
-此模式不会请求 VLM、Embedding 或 Reranker。Embedding/Reranker 只在 `search`、`ask` 时需要；VLM 只在显式传入 `--vision` 时需要。无 VLM 时报告保留 metadata、双语总结、章节、术语、校正审计和完整转录，但不生成基于视觉分析的图文时间轴。
+此模式不会请求 VLM、Embedding 或 Reranker。Embedding/Reranker 只在 `search`、`ask` 时需要；VLM 只在显式传入 `--vision` 时需要。无 VLM 时报告保留 metadata、语言感知总结、章节、术语、校正审计和完整转录，但不生成基于视觉分析的图文时间轴。中文视频只生成中文内容；其他语言视频保留原文并附中文翻译。
 Timeline 可以直接检索：
 
 ```bash

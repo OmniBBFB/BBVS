@@ -1,11 +1,13 @@
-# BBVS 基础流水线：不调用 VLM、Embedding 或 Reranker。
+# Copy this file to config/config.yaml and fill in your local API key.
+# config/config.yaml is ignored by Git and may contain local credentials.
 runs_dir: runs
 
 services:
   llm:
-    base_url: http://10.3.112.34:22310/v1
-    model: bbvs-llm
-    api_key: EMPTY
+    provider: deepseek
+    base_url: https://api.deepseek.com
+    model: deepseek-v4-flash
+    api_key: YOUR_DEEPSEEK_API_KEY
     timeout: 600
 
 keyframes:
