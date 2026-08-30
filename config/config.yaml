@@ -1,0 +1,37 @@
+# BBVS 基础流水线：不调用 VLM、Embedding 或 Reranker。
+runs_dir: runs
+
+services:
+  llm:
+    base_url: http://10.3.112.34:22310/v1
+    model: bbvs-llm
+    api_key: EMPTY
+    timeout: 600
+
+keyframes:
+  threshold: 0.25
+  max_frames: 500
+
+ocr:
+  engine: rapidocr
+  language: ch
+
+asr:
+  engine: faster-whisper
+  model: small
+  device: auto
+  compute_type: default
+  language: null
+  initial_prompt: null
+  hotwords: null
+
+analysis:
+  verify: true
+  vision: false
+  summarize: true
+
+report:
+  enabled: true
+  filename: final-report.pdf
+  include_transcript: true
+  max_images: 12

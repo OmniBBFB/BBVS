@@ -20,11 +20,17 @@ from .retrieval import search
 from .qa import answer_question
 from .report import ReportOptions, export_report
 from .llm import EmbeddingClient, RerankerClient
+from .runner import run_pipeline
+from .settings import AppSettings
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bbvs", description="BBVS 模块化视频理解工作台")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    run_cmd = sub.add_parser("run", help="从 URL 一行运行完整流水线并生成报告")
+    run_cmd.add_argument("source", help="视频 URL，或用于断点续跑的已有 run 目录")
+    run_cmd.add_argument("--config", type=Path, default=Path("config/config.yaml"))
 
     probe_cmd = sub.add_parser("probe", help="查看本地媒体信息")
     probe_cmd.add_argument("video", type=Path)
@@ -79,7 +85,7 @@ def _parser() -> argparse.ArgumentParser:
 
     pipeline_cmd = sub.add_parser("analyze", help="生成术语、Timeline，并按需校正/视觉分析/总结")
     pipeline_cmd.add_argument("run_dir", type=Path)
-    pipeline_cmd.add_argument("--services", type=Path, default=Path("config/services.json"))
+    pipeline_cmd.add_argument("--services", type=Path, default=Path("config/config.yaml"))
     pipeline_cmd.add_argument("--verify", action="store_true")
     pipeline_cmd.add_argument("--vision", action="store_true")
     pipeline_cmd.add_argument("--summarize", action="store_true")
@@ -87,13 +93,13 @@ def _parser() -> argparse.ArgumentParser:
     search_cmd = sub.add_parser("search", help="用 Embedding + Reranker 检索 Timeline")
     search_cmd.add_argument("timeline", type=Path)
     search_cmd.add_argument("query")
-    search_cmd.add_argument("--services", type=Path, default=Path("config/services.json"))
+    search_cmd.add_argument("--services", type=Path, default=Path("config/config.yaml"))
     search_cmd.add_argument("--top-k", type=int, default=5)
 
     ask_cmd = sub.add_parser("ask", help="检索 Timeline 并生成带时间戳证据的回答")
     ask_cmd.add_argument("timeline", type=Path)
     ask_cmd.add_argument("question")
-    ask_cmd.add_argument("--services", type=Path, default=Path("config/services.json"))
+    ask_cmd.add_argument("--services", type=Path, default=Path("config/config.yaml"))
     ask_cmd.add_argument("--top-k", type=int, default=5)
 
     report_cmd = sub.add_parser("export-report", help="将现有分析产物导出为自包含 HTML 或 PDF")
@@ -116,7 +122,9 @@ def _emit(value: object, output: Path | None = None) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    if args.command == "probe":
+    if args.command == "run":
+        print(run_pipeline(args.source, AppSettings.load(args.config)))
+    elif args.command == "probe":
         _emit(media.probe(args.video), args.output)
     elif args.command == "download":
         if args.output_dir:

@@ -1,6 +1,0 @@
-{
-  "llm": {"base_url": "http://10.3.112.34:22310/v1", "model": "bbvs-llm", "timeout": 300},
-  "vlm": {"base_url": "http://10.3.112.34:22010/v1", "model": "bbvs-vlm", "timeout": 300},
-  "embedding": {"base_url": "http://10.3.112.34:23310/v1", "model": "bbvs-embedding", "timeout": 120},
-  "reranker": {"base_url": "http://10.3.112.34:23320/v1", "model": "bbvs-reranker", "timeout": 120}
-}

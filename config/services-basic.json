@@ -1,8 +1,0 @@
-{
-  "llm": {
-    "base_url": "http://10.3.112.34:22310/v1",
-    "model": "bbvs-llm",
-    "api_key": "EMPTY",
-    "timeout": 600
-  }
-}

@@ -1,0 +1,37 @@
+# BBVS 全功能示例。在 config.yaml 基础上启用 VLM、Embedding 和 Reranker。
+runs_dir: runs
+
+services:
+  llm:
+    base_url: http://10.3.112.34:22310/v1
+    model: bbvs-llm
+    api_key: EMPTY
+    timeout: 600
+  vlm:
+    base_url: http://10.3.112.34:22010/v1
+    model: bbvs-vlm
+    api_key: EMPTY
+    timeout: 600
+  embedding:
+    base_url: http://10.3.112.34:23310/v1
+    model: bbvs-embedding
+    api_key: EMPTY
+    timeout: 120
+  reranker:
+    base_url: http://10.3.112.34:23320/v1
+    model: bbvs-reranker
+    api_key: EMPTY
+    timeout: 120
+
+keyframes: {threshold: 0.25, max_frames: 500}
+ocr: {engine: rapidocr, language: ch}
+asr:
+  engine: faster-whisper
+  model: small
+  device: auto
+  compute_type: default
+  language: null
+  initial_prompt: null
+  hotwords: null
+analysis: {verify: true, vision: true, summarize: true}
+report: {enabled: true, filename: final-report.pdf, include_transcript: true, max_images: 12}

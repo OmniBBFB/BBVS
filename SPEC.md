@@ -330,7 +330,7 @@ ASR 应请求 word timestamps。`faster-whisper` 支持独立 hotwords；`openai
 
 ## 8. 远程模型 interface
 
-配置文件默认为 `config/services.json`。`llm` 是总结流程的必需 endpoint；其余三个 endpoint 均可缺省：
+项目默认使用统一的 `config/config.yaml`；`config/config-full.yaml` 是全功能示例。`llm` 是总结流程的必需 endpoint；其余三个 endpoint 均可缺省：
 
 | 名称 | HTTP interface | 用途 |
 |---|---|---|
@@ -339,7 +339,7 @@ ASR 应请求 word timestamps。`faster-whisper` 支持独立 hotwords；`openai
 | `embedding` | `/v1/embeddings` | 时间轴向量召回 |
 | `reranker` | `/v1/rerank` | 候选重排 |
 
-基础模式可以只使用 `config/services-basic.json`。只有显式使用 `--vision` 时才要求 VLM；只有执行 `search` 或 `ask` 时才要求 Embedding，Reranker 始终是可选增强。
+基础模式只使用 `config/config.yaml`。只有显式使用 `--vision` 时才要求 VLM；只有执行 `search` 或 `ask` 时才要求 Embedding，Reranker 始终是可选增强。配置加载器以 YAML 为默认，同时兼容已有 JSON endpoint 配置。
 
 每个 endpoint 配置 `base_url`、`model`、`api_key` 和 `timeout`。环境变量可覆盖：
 
@@ -405,6 +405,7 @@ BBVS_<NAME>_TIMEOUT
 ## 11. CLI 规格
 
 ```text
+bbvs run URL_OR_RUN_DIR [--config config/config.yaml]
 bbvs download URL [--runs-dir runs | --output-dir DIR]
 bbvs rename-run RUN_DIR
 bbvs probe VIDEO [--output FILE]
@@ -419,6 +420,8 @@ bbvs search TIMELINE QUERY [--services FILE] [--top-k N]
 bbvs ask TIMELINE QUESTION [--services FILE] [--top-k N]
 bbvs export-report RUN_DIR --output FILE [--include-transcript] [--max-images N]
 ```
+
+`bbvs run` 是默认产品入口，负责下载、非 LLM 模型、LLM 分析和报告导出。传入已有运行目录时，按产物存在性跳过下载、音频、关键帧、OCR 和 ASR；分步命令用于实验与诊断。
 
 默认 `download URL` 自动创建归档目录。`--output-dir` 是兼容旧脚本的低级模式，只直接写入指定 source 目录。
 

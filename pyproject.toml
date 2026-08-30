@@ -9,7 +9,7 @@ description = "A modular workbench for evaluating video understanding components
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["PyYAML>=6.0"]
 
 [project.optional-dependencies]
 download = ["yt-dlp>=2025.1.0"]

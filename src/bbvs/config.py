@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .io import read_json
 
@@ -23,8 +24,7 @@ class Services:
     reranker: Endpoint | None = None
 
     @classmethod
-    def load(cls, path: Path) -> Services:
-        payload = read_json(path)
+    def from_dict(cls, payload: dict[str, Any]) -> Services:
 
         def endpoint(name: str, *, required: bool = False) -> Endpoint | None:
             item = payload.get(name) or {}
@@ -46,3 +46,17 @@ class Services:
             llm=endpoint("llm", required=True),  # type: ignore[arg-type]
             vlm=endpoint("vlm"), embedding=endpoint("embedding"), reranker=endpoint("reranker"),
         )
+
+    @classmethod
+    def load(cls, path: Path) -> Services:
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            try:
+                import yaml
+            except ImportError as exc:
+                raise ValueError("读取 YAML 配置需要 PyYAML") from exc
+            payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        else:
+            payload = read_json(path)
+        if "services" in payload:
+            payload = payload["services"]
+        return cls.from_dict(payload)
