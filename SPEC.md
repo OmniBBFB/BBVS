@@ -335,7 +335,7 @@ ASR 应请求 word timestamps。`faster-whisper` 支持独立 hotwords；`openai
 
 ## 8. 远程模型 interface
 
-项目默认使用统一的 `config/config.yaml`；`config/config-full.yaml` 是全功能示例。`llm` 是总结流程的必需 endpoint；其余三个 endpoint 均可缺省：
+项目默认使用基础流水线配置 `config/pipeline-basic.yaml`；`config/pipeline-full.yaml` 是全能力配置。`llm` 是总结流程的必需 endpoint；其余三个 endpoint 均可缺省：
 
 | 名称 | HTTP interface | 用途 |
 |---|---|---|
@@ -344,7 +344,7 @@ ASR 应请求 word timestamps。`faster-whisper` 支持独立 hotwords；`openai
 | `embedding` | `/v1/embeddings` | 时间轴向量召回 |
 | `reranker` | `/v1/rerank` | 候选重排 |
 
-基础模式只使用 `config/config.yaml`。只有显式使用 `--vision` 时才要求 VLM；只有执行 `search` 或 `ask` 时才要求 Embedding，Reranker 始终是可选增强。配置加载器以 YAML 为默认，同时兼容已有 JSON endpoint 配置。
+基础模式只使用 `config/pipeline-basic.yaml`。只有显式使用 `--vision` 时才要求 VLM；只有执行 `search` 或 `ask` 时才要求 Embedding，Reranker 始终是可选增强。配置加载器以 YAML 为默认，同时兼容已有 JSON endpoint 配置。
 
 每个 endpoint 配置 `base_url`、`model`、`api_key` 和 `timeout`。环境变量可覆盖：
 
@@ -410,7 +410,7 @@ BBVS_<NAME>_TIMEOUT
 ## 11. CLI 规格
 
 ```text
-bbvs run URL_OR_RUN_DIR [--config config/config.yaml]
+bbvs run URL_OR_RUN_DIR [--config config/pipeline-basic.yaml]
 bbvs download URL [--runs-dir runs | --output-dir DIR]
 bbvs rename-run RUN_DIR
 bbvs probe VIDEO [--output FILE]

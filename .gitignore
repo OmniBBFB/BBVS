@@ -7,4 +7,5 @@ dist/
 build/
 runs/
 models/
-config/config.yaml
+config/pipeline-basic.yaml
+config/pipeline-deepseek.yaml

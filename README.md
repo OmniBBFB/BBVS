@@ -6,12 +6,12 @@
 
 ## 一行运行完整流水线
 
-默认配置使用 `config/config.yaml`。它会依次完成下载、音频、关键帧、OCR、ASR、LLM 分析和 PDF：
+默认配置使用 `config/pipeline-basic.yaml`。它会依次完成下载、音频、关键帧、OCR、ASR、LLM 分析和 PDF：
 
-首次使用先复制本地配置；`config/config.yaml` 已被 Git 忽略，可以保存本地 API Key：
+首次使用先复制 DeepSeek 模板；`config/pipeline-basic.yaml` 已被 Git 忽略，可以保存本地 API Key：
 
 ```bash
-cp config/config.yaml.example config/config.yaml
+cp config/pipeline-deepseek.example.yaml config/pipeline-basic.yaml
 ```
 
 ```bash
@@ -21,13 +21,13 @@ uv run bbvs run 'VIDEO_URL'
 指定其他 YAML：
 
 ```bash
-uv run bbvs run 'VIDEO_URL' --config config/config.yaml
+uv run bbvs run 'VIDEO_URL' --config config/pipeline-basic.yaml
 ```
 
 任务中断后，传入已经创建的运行目录即可按现有产物续跑：
 
 ```bash
-uv run bbvs run 'runs/<视频ID>-<标题>' --config config/config.yaml
+uv run bbvs run 'runs/<视频ID>-<标题>' --config config/pipeline-basic.yaml
 ```
 
 分步命令仍然保留，用于单独评测 ASR、OCR 或关键帧参数。
@@ -132,10 +132,10 @@ ASR 和 OCR 的调用方只依赖各自的小型 interface。内置 adapter：
 
 ## 远程模型与完整分析
 
-模型及流水线配置默认位于 `config/config.yaml`；全功能示例为 `config/config-full.yaml`。也可用环境变量覆盖，例如
+基础流水线配置默认位于 `config/pipeline-basic.yaml`；全能力配置为 `config/pipeline-full.yaml`。也可用环境变量覆盖，例如
 `BBVS_LLM_BASE_URL`、`BBVS_LLM_MODEL` 和 `BBVS_LLM_API_KEY`。
 
-`services.llm.provider` 支持 `openai`（OpenAI-compatible/vLLM）和 `deepseek`。DeepSeek adapter 会把流水线中的思考开关转换为 DeepSeek 的 `thinking` 参数；示例见 `config/config.yaml.example`。
+`services.llm.provider` 支持 `openai`（OpenAI-compatible/vLLM）和 `deepseek`。DeepSeek adapter 会把流水线中的思考开关转换为 DeepSeek 的 `thinking` 参数；模板见 `config/pipeline-deepseek.example.yaml`。
 
 已有下载、ASR、OCR 产物后，先生成术语和多模态 Timeline：
 
@@ -154,7 +154,7 @@ uv run bbvs analyze 'runs/BVxxxx-视频标题' \
 
 ### 基础模式（不使用 VLM、Embedding、Reranker）
 
-基础模式只需要 `config/config.yaml` 中的 LLM。不要传 `--vision`，也不要调用 `search` 或 `ask`：
+基础模式只需要 `config/pipeline-basic.yaml` 中的 LLM。不要传 `--vision`，也不要调用 `search` 或 `ask`：
 
 ```bash
 # 安装基础流水线需要的开源依赖
@@ -173,7 +173,7 @@ uv run bbvs asr 'RUN_DIR/audio.wav' \
   --output 'RUN_DIR/asr-faster-whisper-small.json'
 
 # 只有 LLM：术语、ASR 校验、时间轴、语言感知总结；不传 --vision
-uv run bbvs analyze 'RUN_DIR' --services config/config.yaml \
+uv run bbvs analyze 'RUN_DIR' --services config/pipeline-basic.yaml \
   --verify --summarize
 
 uv run bbvs export-report 'RUN_DIR' \

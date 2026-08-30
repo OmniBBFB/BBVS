@@ -1,4 +1,4 @@
-# BBVS 全功能示例。在 config.yaml 基础上启用 VLM、Embedding 和 Reranker。
+# BBVS 全功能流水线：启用 LLM、VLM、Embedding 和 Reranker。
 runs_dir: runs
 
 services:

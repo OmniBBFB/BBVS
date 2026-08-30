@@ -1,5 +1,5 @@
-# Copy this file to config/config.yaml and fill in your local API key.
-# config/config.yaml is ignored by Git and may contain local credentials.
+# DeepSeek 配置模板。复制为 pipeline-basic.yaml 后填写本地 API Key。
+# config/pipeline-basic.yaml 已被 Git 忽略，可以保存本地凭据。
 runs_dir: runs
 
 services:
