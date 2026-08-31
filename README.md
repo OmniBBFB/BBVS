@@ -30,6 +30,10 @@ uv run bbvs run 'VIDEO_URL' --config config/pipeline-basic.yaml
 uv run bbvs run 'runs/<视频ID>-<标题>' --config config/pipeline-basic.yaml
 ```
 
+流水线按步骤保存实验产物：`audio/`、`keyframes/<variant>/`、`ocr/<variant>/`、
+`asr/<variant>/`、`analysis/<variant>/` 和 `reports/<variant>/`。同一配置再次运行会复用；
+切换模型或参数会创建新的 variant，因此可以保留 ASR/OCR 等上游结果，只重跑受影响的下游步骤。
+
 分步命令仍然保留，用于单独评测 ASR、OCR 或关键帧参数。
 
 ## 环境
@@ -137,6 +141,12 @@ ASR 和 OCR 的调用方只依赖各自的小型 interface。内置 adapter：
 
 `services.llm.provider` 支持 `openai`（OpenAI-compatible/vLLM）和 `deepseek`。DeepSeek adapter 会把流水线中的思考开关转换为 DeepSeek 的 `thinking` 参数；模板见 `config/pipeline-deepseek.example.yaml`。
 
+本地 vLLM 与 DeepSeek API 都使用同一份配置结构，不需要两套 schema：本地通常设置
+`provider: openai` 和本地 `base_url`；DeepSeek 设置 `provider: deepseek`、官方 `base_url`
+及 API Key。`run`/`analyze` 只用 `--config`/`--services` 选择配置，也可通过
+`BBVS_LLM_PROVIDER`、`BBVS_LLM_BASE_URL`、`BBVS_LLM_MODEL`、`BBVS_LLM_API_KEY`
+逐项覆盖。仅 `llm-ping` 提供直接的 `--provider --base-url --model --api-key` 参数。
+
 已有下载、ASR、OCR 产物后，先生成术语和多模态 Timeline：
 
 ```bash
@@ -149,6 +159,10 @@ uv run bbvs analyze 'runs/BVxxxx-视频标题'
 uv run bbvs analyze 'runs/BVxxxx-视频标题' \
   --verify --vision --summarize
 ```
+
+当一个 run 中已有多个 ASR 或 OCR variant 时，单独运行 `analyze` 需用
+`--transcript .../transcript.json --ocr-input .../frames.json` 明确选择输入；一行 `run`
+命令会根据配置自动选择对应 variant。
 
 各阶段会写入 `run_dir/analysis/`，已有术语文件会复用，从而支持断点恢复。
 

@@ -57,8 +57,8 @@ def _image_uri(path: Path) -> str:
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
-def _representative_frames(run_dir: Path, limit: int) -> list[dict[str, Any]]:
-    candidates = sorted(run_dir.glob("ocr-*.json"))
+def _representative_frames(run_dir: Path, limit: int, frames_path: Path | None = None) -> list[dict[str, Any]]:
+    candidates = [frames_path] if frames_path else sorted(run_dir.glob("ocr-*.json"))
     if not candidates or limit <= 0:
         return []
     frames = [row for row in read_json(candidates[0]) if Path(row["path"]).exists()]
@@ -69,9 +69,11 @@ def _representative_frames(run_dir: Path, limit: int) -> list[dict[str, Any]]:
     return [informative[index] for index in indices]
 
 
-def _visual_timeline_cards(run_dir: Path, limit: int) -> list[dict[str, Any]]:
-    visual_path = run_dir / "analysis" / "visual-analysis.json"
-    frame_candidates = sorted(run_dir.glob("ocr-*.json"))
+def _visual_timeline_cards(
+    run_dir: Path, analysis: Path, limit: int, frames_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    visual_path = analysis / "visual-analysis.json"
+    frame_candidates = [frames_path] if frames_path else sorted(run_dir.glob("ocr-*.json"))
     if limit <= 0 or not visual_path.exists() or not frame_candidates:
         return []
     frames = [row for row in read_json(frame_candidates[0]) if Path(row["path"]).exists()]
@@ -142,9 +144,13 @@ a { color: #2563eb; text-decoration: none; }
 """
 
 
-def build_html(run_dir: Path, options: ReportOptions = ReportOptions()) -> str:
+def build_html(
+    run_dir: Path, options: ReportOptions = ReportOptions(), *,
+    analysis_dir: Path | None = None, transcript_path: Path | None = None,
+    frames_path: Path | None = None,
+) -> str:
     source = run_dir / "source"
-    analysis = run_dir / "analysis"
+    analysis = analysis_dir or run_dir / "analysis"
     metadata = _load(source / "metadata.json", {})
     summary = _load(analysis / "summary.json", {})
     chapters = _load(analysis / "chapters.json", [])
@@ -187,7 +193,7 @@ def build_html(run_dir: Path, options: ReportOptions = ReportOptions()) -> str:
     )
     terms_html = f'<h2>术语表</h2><table><thead><tr><th>术语</th><th>类别</th><th>置信度</th><th>证据</th></tr></thead><tbody>{term_rows}</tbody></table>' if terms else ""
 
-    frames = _visual_timeline_cards(run_dir, options.max_images)
+    frames = _visual_timeline_cards(run_dir, analysis, options.max_images, frames_path)
     gallery = ""
     if frames:
         figures = "".join(
@@ -211,7 +217,8 @@ def build_html(run_dir: Path, options: ReportOptions = ReportOptions()) -> str:
 
     transcript_html = ""
     if options.include_transcript:
-        candidates = [analysis / "verified-transcript.json", *sorted(run_dir.glob("asr-*.json"))]
+        candidates = [analysis / "verified-transcript.json"]
+        candidates += [transcript_path] if transcript_path else sorted(run_dir.glob("asr-*.json"))
         transcript = next((_load(path, {}) for path in candidates if path.exists()), {})
         rows = "".join(
             f'<p><span class="time">{_timestamp_link(url, row.get("start", 0))}</span> {_text(row.get("text"))}</p>'
@@ -228,9 +235,13 @@ def build_html(run_dir: Path, options: ReportOptions = ReportOptions()) -> str:
 
 def export_report(
     run_dir: Path, output: Path, options: ReportOptions = ReportOptions(),
-    renderer: PdfRenderer | None = None,
+    renderer: PdfRenderer | None = None, *, analysis_dir: Path | None = None,
+    transcript_path: Path | None = None, frames_path: Path | None = None,
 ) -> Path:
-    document = build_html(run_dir, options)
+    document = build_html(
+        run_dir, options, analysis_dir=analysis_dir,
+        transcript_path=transcript_path, frames_path=frames_path,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.suffix.lower() == ".html":
         output.write_text(document, encoding="utf-8")

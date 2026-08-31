@@ -4,6 +4,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .config import Services
+from .artifacts import find_inputs
 from .io import read_json, write_json
 from .llm import EmbeddingClient, RerankerClient, create_chat_client
 from .models import Chapter, Correction, Evidence, Frame, Term, TimelineSegment, Transcript, VisualAnalysis
@@ -44,14 +45,23 @@ class VideoPipeline:
             if services.reranker else None
         )
 
-    def analyze(self, run_dir: Path, *, verify: bool = False, vision: bool = False, summarize: bool = False) -> Path:
-        analysis_dir = run_dir / "analysis"
+    def analyze(
+        self, run_dir: Path, *, verify: bool = False, vision: bool = False,
+        summarize: bool = False, transcript_path: Path | None = None,
+        frames_path: Path | None = None, analysis_dir: Path | None = None,
+    ) -> Path:
+        analysis_dir = analysis_dir or run_dir / "analysis"
         analysis_dir.mkdir(parents=True, exist_ok=True)
+        status_path = analysis_dir / "status.json"
+        if status_path.exists() and read_json(status_path).get("complete") is True:
+            return analysis_dir
         metadata = read_json(run_dir / "source" / "metadata.json")
-        transcript_candidates = sorted(run_dir.glob("asr-*.json"))
-        ocr_candidates = sorted(run_dir.glob("ocr-*.json"))
+        transcript_candidates = [transcript_path] if transcript_path else find_inputs(run_dir, "asr", "transcript.json", "asr-*.json")
+        ocr_candidates = [frames_path] if frames_path else find_inputs(run_dir, "ocr", "frames.json", "ocr-*.json")
         if not transcript_candidates or not ocr_candidates:
-            raise FileNotFoundError("run 目录需要至少一个 asr-*.json 和 ocr-*.json")
+            raise FileNotFoundError("run 目录需要至少一份 ASR 和 OCR 产物")
+        if len(transcript_candidates) > 1 or len(ocr_candidates) > 1:
+            raise ValueError("发现多份 ASR/OCR 产物，请显式指定 transcript_path 和 frames_path")
         transcript = from_dict(read_json(transcript_candidates[0]))
         frames = [Frame(**row) for row in read_json(ocr_candidates[0])]
 
@@ -130,4 +140,5 @@ class VideoPipeline:
                 )
                 save_chapters(chapters)
                 write_json(summary_path, report)
+        write_json(status_path, {"complete": True})
         return analysis_dir

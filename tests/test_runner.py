@@ -33,16 +33,20 @@ def test_one_command_runner_executes_all_stages(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr("bbvs.runner.VideoPipeline", FakePipeline)
     monkeypatch.setattr(
         "bbvs.runner.export_report",
-        lambda path, output, options: events.append(("report", output)) or output,
+        lambda path, output, options, **inputs: events.append(("report", output)) or output,
     )
     settings = AppSettings(services=Services(Endpoint("http://llm/v1", "m")), runs_dir=tmp_path / "runs")
 
     result = run_pipeline("https://video", settings, progress=lambda message: events.append(message))
 
     assert result == run_dir
-    assert (run_dir / "audio.wav").exists()
-    assert (run_dir / "keyframes" / "keyframes.json").exists()
-    assert (run_dir / "ocr-rapidocr.json").exists()
-    assert (run_dir / "asr-faster-whisper-small.json").exists()
+    assert (run_dir / "audio" / "audio.wav").exists()
+    assert len(list((run_dir / "keyframes").glob("*/keyframes.json"))) == 1
+    assert len(list((run_dir / "ocr").glob("*/frames.json"))) == 1
+    assert len(list((run_dir / "asr").glob("*/transcript.json"))) == 1
+    analyze_event = next(event for event in events if isinstance(event, tuple) and event[0] == "analyze")
+    assert analyze_event[1]["analysis_dir"].parent == run_dir / "analysis"
+    report_event = next(event for event in events if isinstance(event, tuple) and event[0] == "report")
+    assert report_event[1].parent.parent == run_dir / "reports"
     assert any(isinstance(event, tuple) and event[0] == "analyze" for event in events)
     assert any(isinstance(event, tuple) and event[0] == "report" for event in events)

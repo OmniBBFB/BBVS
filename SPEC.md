@@ -117,27 +117,33 @@ runs/<id>-<title>/
 │   ├── source.info.json
 │   ├── metadata.json
 │   └── source.<subtitle extension>
-├── audio.wav
+├── audio/
+│   └── audio.wav
 ├── keyframes/
-│   ├── keyframes.json
-│   └── frame_*.jpg
-├── asr-<engine>-<model>.json
-├── ocr-<engine>.json
+│   └── <参数variant>/
+│       ├── keyframes.json
+│       └── frame_*.jpg
+├── asr/
+│   └── <engine-model-variant>/transcript.json
+├── ocr/
+│   └── <engine-language-variant>/frames.json
 ├── subtitles/
 │   ├── *.srt
 │   └── *.txt
 ├── analysis/
-│   ├── terminology.json
-│   ├── corrections.json
-│   ├── verified-transcript.json
-│   ├── visual-analysis.json
-│   ├── timeline.json
-│   ├── chapters.json
-│   └── summary.json
-└── *.html / *.pdf
+│   └── <provider-model-variant>/
+│       ├── terminology.json
+│       ├── corrections.json
+│       ├── verified-transcript.json
+│       ├── visual-analysis.json
+│       ├── timeline.json
+│       ├── chapters.json
+│       └── summary.json
+└── reports/
+    └── <analysis-report-variant>/*.html|*.pdf
 ```
 
-文件名可因实验配置不同而变化；pipeline 通过 `asr-*.json` 和 `ocr-*.json` 发现输入。
+每个 variant 目录名由可读标签和完整配置摘要组成。同一配置命中已有产物时复用；模型、参数或上游输入变化时创建新 variant。凭据不参与摘要。旧版根目录下的 `asr-*.json`、`ocr-*.json` 和 `analysis/` 仍可读取，但新的一行流水线不再写入这些位置。
 
 ## 6. 数据契约
 

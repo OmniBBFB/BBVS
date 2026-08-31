@@ -9,9 +9,10 @@ from pathlib import Path
 from . import asr, ingest, keyframes, media, ocr
 from .archive import archive_run
 from .errors import BBVSError
-from .config import Services
+from .artifacts import variant
+from .config import Endpoint, Services
 from .io import read_json, write_json
-from .llm import OpenAICompatibleClient
+from .llm import create_chat_client
 from .models import Frame, to_dict
 from .transcript import export as export_transcript
 from .transcript import from_dict as transcript_from_dict
@@ -22,6 +23,7 @@ from .report import ReportOptions, export_report
 from .llm import EmbeddingClient, RerankerClient
 from .runner import run_pipeline
 from .settings import AppSettings
+from .summarize import SUMMARY_PROMPT_VERSION
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -76,6 +78,7 @@ def _parser() -> argparse.ArgumentParser:
     llm_cmd.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     llm_cmd.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY", "EMPTY"))
     llm_cmd.add_argument("--model", required=True)
+    llm_cmd.add_argument("--provider", choices=("openai", "deepseek"), default="openai")
     llm_cmd.add_argument("--prompt", default="只回复 pong")
 
     export_cmd = sub.add_parser("export-transcript", help="将 ASR JSON 导出为 SRT 或纯文本")
@@ -89,6 +92,8 @@ def _parser() -> argparse.ArgumentParser:
     pipeline_cmd.add_argument("--verify", action="store_true")
     pipeline_cmd.add_argument("--vision", action="store_true")
     pipeline_cmd.add_argument("--summarize", action="store_true")
+    pipeline_cmd.add_argument("--transcript", type=Path, help="显式选择一份 ASR 产物")
+    pipeline_cmd.add_argument("--ocr-input", type=Path, help="显式选择一份 OCR 产物")
 
     search_cmd = sub.add_parser("search", help="用 Embedding + Reranker 检索 Timeline")
     search_cmd.add_argument("timeline", type=Path)
@@ -164,14 +169,26 @@ def run(args: argparse.Namespace) -> None:
         )
         _emit(transcript, args.output)
     elif args.command == "llm-ping":
-        client = OpenAICompatibleClient(args.base_url, args.api_key)
+        client = create_chat_client(Endpoint(args.base_url, args.model, args.api_key, provider=args.provider))
         print(client.chat(model=args.model, messages=[{"role": "user", "content": args.prompt}]))
     elif args.command == "export-transcript":
         transcript = transcript_from_dict(read_json(args.transcript))
         print(export_transcript(transcript, args.output, args.format))
     elif args.command == "analyze":
-        pipeline = VideoPipeline(Services.load(args.services))
-        print(pipeline.analyze(args.run_dir, verify=args.verify, vision=args.vision, summarize=args.summarize))
+        services = Services.load(args.services)
+        pipeline = VideoPipeline(services)
+        analysis_config = {
+            "services": services, "verify": args.verify, "vision": args.vision,
+            "summarize": args.summarize, "transcript": str(args.transcript), "ocr": str(args.ocr_input),
+            "summary_prompt": SUMMARY_PROMPT_VERSION,
+        }
+        analysis_dir = args.run_dir / "analysis" / variant(
+            f"{services.llm.provider}-{services.llm.model}", analysis_config,
+        )
+        print(pipeline.analyze(
+            args.run_dir, verify=args.verify, vision=args.vision, summarize=args.summarize,
+            transcript_path=args.transcript, frames_path=args.ocr_input, analysis_dir=analysis_dir,
+        ))
     elif args.command == "search":
         services = Services.load(args.services)
         if not services.embedding:
@@ -194,7 +211,7 @@ def run(args: argparse.Namespace) -> None:
             args.question, _timeline(read_json(args.timeline)), embedding, services.embedding.model,
             reranker, services.reranker.model if services.reranker else None, top_k=args.top_k,
         )
-        llm = OpenAICompatibleClient(services.llm.base_url, services.llm.api_key, services.llm.timeout)
+        llm = create_chat_client(services.llm)
         _emit(answer_question(args.question, hits, llm, services.llm.model))
     elif args.command == "export-report":
         options = ReportOptions(

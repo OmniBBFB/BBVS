@@ -200,6 +200,32 @@ def test_final_summary_request_does_not_repeat_chapter_translations() -> None:
     assert final_call["max_tokens"] == 1536
 
 
+def test_summary_prompts_request_first_person_without_mechanical_repetition() -> None:
+    timeline = build_timeline(
+        Transcript("en", 60, [TranscriptSegment(0, 60, "Evidence")], "e", "m"), [], []
+    )
+
+    class CapturingChat:
+        def __init__(self): self.prompts = []
+        def chat(self, **kwargs):
+            self.prompts.append(kwargs["messages"][0]["content"])
+            if len(self.prompts) == 1:
+                return json.dumps({
+                    "title": "Topic", "title_zh": "主题", "summary": "I explain it.",
+                    "summary_zh": "我解释了它。", "key_points": [], "key_points_zh": [],
+                })
+            return json.dumps({
+                "summary": "I conclude.", "summary_zh": "我的结论。", "key_concepts": [],
+                "key_concepts_zh": [], "takeaways": [], "takeaways_zh": [],
+            })
+
+    client = CapturingChat()
+    summarize_timeline(timeline, client, "m")
+
+    assert all("first-person" in prompt for prompt in client.prompts)
+    assert all("mechanically" in prompt for prompt in client.prompts)
+
+
 def test_chinese_summary_does_not_request_or_return_duplicate_translation_fields() -> None:
     timeline = build_timeline(
         Transcript("zh", 60, [TranscriptSegment(0, 60, "这是中文内容")], "e", "m"), [], []
