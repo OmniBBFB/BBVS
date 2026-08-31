@@ -48,6 +48,22 @@ class ReportSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RetrySettings:
+    attempts: int = 3
+    initial_delay: float = 2.0
+    multiplier: float = 2.0
+    max_delay: float = 30.0
+
+    def __post_init__(self) -> None:
+        if self.attempts < 1:
+            raise ValueError("retry.attempts 必须至少为 1")
+        if self.initial_delay < 0 or self.max_delay < 0:
+            raise ValueError("retry 延迟不能为负数")
+        if self.multiplier < 1:
+            raise ValueError("retry.multiplier 必须至少为 1")
+
+
+@dataclass(frozen=True, slots=True)
 class AppSettings:
     services: Services
     runs_dir: Path = Path("runs")
@@ -56,6 +72,7 @@ class AppSettings:
     asr: ASRSettings = field(default_factory=ASRSettings)
     analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
     report: ReportSettings = field(default_factory=ReportSettings)
+    retry: RetrySettings = field(default_factory=RetrySettings)
 
     @classmethod
     def load(cls, path: Path) -> AppSettings:
@@ -77,4 +94,5 @@ class AppSettings:
             asr=ASRSettings(**section("asr")),
             analysis=AnalysisSettings(**section("analysis")),
             report=ReportSettings(**section("report")),
+            retry=RetrySettings(**section("retry")),
         )

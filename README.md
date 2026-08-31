@@ -34,6 +34,18 @@ uv run bbvs run 'runs/<视频ID>-<标题>' --config config/pipeline-basic.yaml
 `asr/<variant>/`、`analysis/<variant>/` 和 `reports/<variant>/`。同一配置再次运行会复用；
 切换模型或参数会创建新的 variant，因此可以保留 ASR/OCR 等上游结果，只重跑受影响的下游步骤。
 
+七个步骤均由独立阶段对象执行，并共享一个阶段上下文。每个阶段默认最多尝试 3 次，
+失败后等待 2 秒、4 秒再试；确定性的配置错误、缺少输入和依赖缺失会立即失败。
+远程分析重试会重新创建模型客户端，并从已写入的 checkpoint 继续。可在 YAML 中调整：
+
+```yaml
+retry:
+  attempts: 3
+  initial_delay: 2
+  multiplier: 2
+  max_delay: 30
+```
+
 分步命令仍然保留，用于单独评测 ASR、OCR 或关键帧参数。
 
 ## 环境

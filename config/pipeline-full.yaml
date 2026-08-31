@@ -1,6 +1,12 @@
 # BBVS 全功能流水线：启用 LLM、VLM、Embedding 和 Reranker。
 runs_dir: runs
 
+retry:
+  attempts: 3
+  initial_delay: 2
+  multiplier: 2
+  max_delay: 30
+
 services:
   llm:
     base_url: http://10.3.112.34:22310/v1

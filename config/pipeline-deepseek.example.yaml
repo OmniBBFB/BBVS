@@ -2,6 +2,12 @@
 # config/pipeline-basic.yaml 已被 Git 忽略，可以保存本地凭据。
 runs_dir: runs
 
+retry:
+  attempts: 3
+  initial_delay: 2
+  multiplier: 2
+  max_delay: 30
+
 services:
   llm:
     provider: deepseek
