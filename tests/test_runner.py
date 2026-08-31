@@ -50,3 +50,6 @@ def test_one_command_runner_executes_all_stages(monkeypatch, tmp_path: Path) -> 
     assert report_event[1].parent.parent == run_dir / "reports"
     assert any(isinstance(event, tuple) and event[0] == "analyze" for event in events)
     assert any(isinstance(event, tuple) and event[0] == "report" for event in events)
+    elapsed = [event for event in events if isinstance(event, str) and "完成，耗时" in event]
+    assert len(elapsed) == 7
+    assert all(event.endswith(" 秒") for event in elapsed)

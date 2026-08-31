@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+from time import perf_counter
 from typing import Callable
 
 from . import asr, ingest, keyframes, media, ocr
@@ -16,6 +17,10 @@ from .summarize import SUMMARY_PROMPT_VERSION
 Progress = Callable[[str], None]
 
 
+def _report_elapsed(progress: Progress, stage: int, started_at: float) -> None:
+    progress(f"      [{stage}/7] 完成，耗时 {perf_counter() - started_at:.2f} 秒")
+
+
 def _existing_video(run_dir: Path) -> Path:
     extensions = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
     video = next(
@@ -28,6 +33,7 @@ def _existing_video(run_dir: Path) -> Path:
 
 
 def run_pipeline(source: str, settings: AppSettings, progress: Progress = print) -> Path:
+    started_at = perf_counter()
     candidate = Path(source)
     if candidate.is_dir():
         run_dir = candidate.resolve()
@@ -37,7 +43,9 @@ def run_pipeline(source: str, settings: AppSettings, progress: Progress = print)
         progress("[1/7] 下载视频、字幕和元数据")
         run_dir, video, _ = ingest.download_to_run(source, settings.runs_dir)
     progress(f"      运行目录: {run_dir}")
+    _report_elapsed(progress, 1, started_at)
 
+    started_at = perf_counter()
     audio_dir = run_dir / "audio"
     audio_path = audio_dir / "audio.wav"
     if not audio_path.exists():
@@ -46,7 +54,9 @@ def run_pipeline(source: str, settings: AppSettings, progress: Progress = print)
         media.extract_audio(video, audio_path)
     else:
         progress("[2/7] 复用已有音频")
+    _report_elapsed(progress, 2, started_at)
 
+    started_at = perf_counter()
     frames_config = asdict(settings.keyframes)
     frames_dir = step_dir(
         run_dir, "keyframes",
@@ -61,7 +71,9 @@ def run_pipeline(source: str, settings: AppSettings, progress: Progress = print)
         write_json(frames_path, [asdict(frame) for frame in frames])
     else:
         progress("[3/7] 复用已有关键帧")
+    _report_elapsed(progress, 3, started_at)
 
+    started_at = perf_counter()
     ocr_config = {**asdict(settings.ocr), "keyframes": frames_dir.name}
     ocr_dir = step_dir(run_dir, "ocr", f"{settings.ocr.engine}-{settings.ocr.language}", ocr_config)
     ocr_path = ocr_dir / "frames.json"
@@ -74,7 +86,9 @@ def run_pipeline(source: str, settings: AppSettings, progress: Progress = print)
         write_json(ocr_path, [asdict(frame) for frame in recognized])
     else:
         progress("[4/7] 复用已有 OCR")
+    _report_elapsed(progress, 4, started_at)
 
+    started_at = perf_counter()
     asr_config = asdict(settings.asr)
     asr_dir = step_dir(run_dir, "asr", f"{settings.asr.engine}-{settings.asr.model}", asr_config)
     asr_path = asr_dir / "transcript.json"
@@ -92,7 +106,9 @@ def run_pipeline(source: str, settings: AppSettings, progress: Progress = print)
         write_json(asr_path, asdict(transcript))
     else:
         progress("[5/7] 复用已有 ASR")
+    _report_elapsed(progress, 5, started_at)
 
+    started_at = perf_counter()
     progress("[6/7] 构建时间轴并生成总结")
     analysis_config = {
         "services": settings.services, "analysis": settings.analysis,
@@ -106,7 +122,9 @@ def run_pipeline(source: str, settings: AppSettings, progress: Progress = print)
         summarize=settings.analysis.summarize, transcript_path=asr_path,
         frames_path=ocr_path, analysis_dir=analysis_dir,
     )
+    _report_elapsed(progress, 6, started_at)
 
+    started_at = perf_counter()
     if settings.report.enabled:
         progress("[7/7] 导出报告")
         report_config = {"analysis": analysis_dir.name, **asdict(settings.report)}
@@ -114,16 +132,17 @@ def run_pipeline(source: str, settings: AppSettings, progress: Progress = print)
         report_path = report_dir / settings.report.filename
         if report_path.exists():
             progress("      复用已有报告")
-            return run_dir
-        export_report(
-            run_dir, report_path,
-            ReportOptions(
-                include_transcript=settings.report.include_transcript,
-                max_images=settings.report.max_images,
-                expect_vision=settings.analysis.vision,
-            ),
-            analysis_dir=analysis_dir, transcript_path=asr_path, frames_path=ocr_path,
-        )
+        else:
+            export_report(
+                run_dir, report_path,
+                ReportOptions(
+                    include_transcript=settings.report.include_transcript,
+                    max_images=settings.report.max_images,
+                    expect_vision=settings.analysis.vision,
+                ),
+                analysis_dir=analysis_dir, transcript_path=asr_path, frames_path=ocr_path,
+            )
     else:
         progress("[7/7] 配置已关闭报告导出")
+    _report_elapsed(progress, 7, started_at)
     return run_dir
