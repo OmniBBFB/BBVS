@@ -26,6 +26,7 @@ all = [
   "rapidocr-onnxruntime>=1.4.0",
   "Pillow>=10.0",
   "paddleocr>=3.0.0",
+  "weasyprint>=66.0",
 ]
 
 [project.scripts]

@@ -252,6 +252,7 @@ all = [
     { name = "paddleocr" },
     { name = "pillow" },
     { name = "rapidocr-onnxruntime" },
+    { name = "weasyprint" },
     { name = "yt-dlp" },
 ]
 asr-faster-whisper = [
@@ -291,6 +292,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rapidocr-onnxruntime", marker = "extra == 'all'", specifier = ">=1.4.0" },
     { name = "rapidocr-onnxruntime", marker = "extra == 'ocr-rapidocr'", specifier = ">=1.4.0" },
+    { name = "weasyprint", marker = "extra == 'all'", specifier = ">=66.0" },
     { name = "weasyprint", marker = "extra == 'report'", specifier = ">=66.0" },
     { name = "yt-dlp", marker = "extra == 'all'", specifier = ">=2025.1.0" },
     { name = "yt-dlp", marker = "extra == 'download'", specifier = ">=2025.1.0" },
