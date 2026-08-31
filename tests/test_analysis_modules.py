@@ -197,7 +197,29 @@ def test_final_summary_request_does_not_repeat_chapter_translations() -> None:
     final_prompt = final_call["messages"][0]["content"]
     assert '"summary_zh": "摘要"' not in final_prompt
     assert '"key_points_zh"' not in final_prompt
-    assert final_call["max_tokens"] == 1536
+    assert final_call["max_tokens"] == 4096
+
+
+def test_final_summary_has_enough_output_budget_to_finish_json() -> None:
+    timeline = build_timeline(
+        Transcript("zh", 60, [TranscriptSegment(0, 60, "市场分析")], "e", "m"), [], []
+    )
+
+    class BudgetSensitiveChat:
+        def __init__(self): self.calls = []
+        def chat(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return json.dumps({"title": "市场", "summary": "震荡", "key_points": []})
+            if kwargs["max_tokens"] < 3072:
+                return '{"summary":"' + "很长的市场总结" * 200
+            return json.dumps({"summary": "我总结市场走势。", "key_concepts": [], "takeaways": []})
+
+    client = BudgetSensitiveChat()
+    _, report = summarize_timeline(timeline, client, "m", source_language="zh")
+
+    assert report["summary"] == "我总结市场走势。"
+    assert "不超过 500 个汉字" in client.calls[-1]["messages"][0]["content"]
 
 
 def test_summary_prompts_request_first_person_without_mechanical_repetition() -> None:

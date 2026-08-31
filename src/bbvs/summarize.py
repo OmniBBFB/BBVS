@@ -72,6 +72,7 @@ def summarize_timeline(
             "基于以下章节，以讲述者本人的第一人称视角生成简洁的中文内容总结。"
             "summary 应像我在回顾并归纳自己的完整讲述；不要写成“讲述者介绍了”“作者认为”或“本视频讨论了”，"
             "也不要在每句话机械重复“我”。返回 JSON，且只包含 summary、key_concepts、takeaways。"
+            "summary 不超过 500 个汉字；key_concepts 和 takeaways 各不超过 8 项，每项不超过 40 个汉字。"
             "所有概念使用自然中文；必要外文专名可在括号中保留原文，不要另造英文版本。\n"
             + json.dumps(condensed, ensure_ascii=False)
         )
@@ -82,11 +83,12 @@ def summarize_timeline(
             "explanation. Never describe the speaker, author, presenter, or video from a third-person observer's "
             "perspective, and avoid mechanically starting every sentence with 'I'. Return JSON with exactly "
             "summary, summary_zh, key_concepts, key_concepts_zh, takeaways, "
-            "takeaways_zh. Original and _zh arrays must be aligned item by item. Keep the summary concise.\n"
+            "takeaways_zh. Keep summary under 350 words and summary_zh under 500 Chinese characters. Limit each "
+            "array to 8 short items; original and _zh arrays must be aligned item by item.\n"
             + json.dumps(condensed, ensure_ascii=False)
         )
     report = parse_json_content(client.chat(
-        model=model, messages=[{"role": "user", "content": final_prompt}], max_tokens=1536,
+        model=model, messages=[{"role": "user", "content": final_prompt}], max_tokens=4096,
         response_format={"type": "json_object"},
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     ))
