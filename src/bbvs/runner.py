@@ -3,21 +3,27 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import re
 from time import perf_counter, sleep
 from typing import Callable, Sequence
 
 from . import asr, ingest, keyframes, media, ocr
+from .transcript import preferred_platform_transcript
 from .artifacts import step_dir, variant
-from .errors import DependencyError
+from .errors import BBVSError, DependencyError
 from .io import read_json, write_json
 from .models import Frame
 from .pipeline import VideoPipeline
 from .report import ReportOptions, export_report
 from .settings import AppSettings, RetrySettings
 from .summarize import SUMMARY_PROMPT_VERSION
+from .authoring import AUTHORING_PROMPT_VERSION
 
 Progress = Callable[[str], None]
 Sleeper = Callable[[float], None]
+PipelineRunner = Callable[..., Path]
+
+_BVID = re.compile(r"BV[0-9A-Za-z]{10}")
 
 
 def _existing_video(run_dir: Path) -> Path:
@@ -186,6 +192,18 @@ class ASRStage(PipelineStage):
 
     def _run(self, context: StageContext) -> None:
         settings = context.settings.asr
+        platform_transcript = preferred_platform_transcript(context.require("run_dir"))
+        if platform_transcript is not None:
+            output_dir = step_dir(
+                context.require("run_dir"), "asr", platform_transcript.engine,
+                {"engine": platform_transcript.engine, "model": platform_transcript.model},
+            )
+            output_path = output_dir / "transcript.json"
+            context.asr_dir, context.asr_path = output_dir, output_path
+            if not output_path.exists():
+                write_json(output_path, asdict(platform_transcript))
+            context.progress(f"[5/7] 使用平台字幕（{platform_transcript.engine}）")
+            return
         output_dir = step_dir(
             context.require("run_dir"), "asr", f"{settings.engine}-{settings.model}", asdict(settings),
         )
@@ -215,9 +233,11 @@ class AnalysisStage(PipelineStage):
         settings = context.settings
         config = {
             "services": settings.services, "analysis": settings.analysis,
+            "authoring": settings.authoring,
+            "authoring": settings.authoring,
             "asr": context.require("asr_dir").name,
             "ocr": context.require("ocr_path").parent.name,
-            "summary_prompt": SUMMARY_PROMPT_VERSION,
+            "summary_prompt": AUTHORING_PROMPT_VERSION if settings.analysis.authoring else SUMMARY_PROMPT_VERSION,
         }
         llm = settings.services.llm
         context.analysis_dir = context.require("run_dir") / "analysis" / variant(
@@ -227,6 +247,7 @@ class AnalysisStage(PipelineStage):
         VideoPipeline(settings.services).analyze(
             context.require("run_dir"), verify=settings.analysis.verify,
             vision=settings.analysis.vision, summarize=settings.analysis.summarize,
+            authoring=settings.analysis.authoring, authoring_settings=settings.authoring,
             transcript_path=context.require("asr_path"), frames_path=context.require("ocr_path"),
             analysis_dir=context.analysis_dir,
         )
@@ -287,3 +308,79 @@ def run_pipeline(
 ) -> Path:
     context = StageContext(source=source, settings=settings, progress=progress)
     return Pipeline(default_stages(settings.retry, sleeper)).run(context)
+
+
+def _manifest_sources(manifest: Path) -> list[tuple[str, str]]:
+    sources: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line_number, raw_line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
+        value = raw_line.strip()
+        if not value or value.startswith("#"):
+            continue
+        match = _BVID.fullmatch(value)
+        if match:
+            bvid = match.group(0)
+        else:
+            match = re.fullmatch(
+                r"https?://(?:www\.)?bilibili\.com/video/(BV[0-9A-Za-z]{10})(?:[/?#].*)?",
+                value,
+            )
+            if not match:
+                raise ValueError(f"批量清单第 {line_number} 行不是有效 BV 号或 Bilibili 视频 URL: {value}")
+            bvid = match.group(1)
+        if bvid not in seen:
+            seen.add(bvid)
+            sources.append((bvid, f"https://www.bilibili.com/video/{bvid}"))
+    if not sources:
+        raise ValueError(f"批量清单为空: {manifest}")
+    return sources
+
+
+def _batch_run_dir(runs_dir: Path, bvid: str) -> Path | None:
+    candidates = sorted(path for path in runs_dir.glob(f"{bvid}-*") if path.is_dir())
+    if len(candidates) > 1:
+        raise FileExistsError(f"{bvid} 匹配到多个运行目录，无法确定复用目标")
+    return candidates[0].resolve() if candidates else None
+
+
+def run_batch(
+    manifest: Path, settings: AppSettings, progress: Progress = print, *,
+    runner: PipelineRunner = run_pipeline, sleeper: Sleeper = sleep,
+) -> Path:
+    sources = _manifest_sources(manifest)
+    results_path = settings.runs_dir / "batches" / f"{manifest.stem}.json"
+    results: list[dict[str, str]] = []
+    progress(f"批量任务：共 {len(sources)} 个视频")
+
+    for index, (bvid, url) in enumerate(sources, 1):
+        progress(f"\n===== [{index}/{len(sources)}] {bvid} =====")
+        try:
+            existing = _batch_run_dir(settings.runs_dir, bvid)
+            run_dir = runner(str(existing) if existing else url, settings, progress=progress, sleeper=sleeper)
+            results.append({"bvid": bvid, "status": "completed", "run_dir": str(run_dir)})
+        except (BBVSError, ValueError, FileNotFoundError, FileExistsError) as exc:
+            progress(f"      [{index}/{len(sources)}] 失败，继续下一个视频: {exc}")
+            item = {"bvid": bvid, "status": "failed", "error": str(exc)}
+            existing = _batch_run_dir(settings.runs_dir, bvid)
+            if existing:
+                item["run_dir"] = str(existing)
+            results.append(item)
+        write_json(results_path, {"manifest": str(manifest.resolve()), "items": results})
+
+    failed = [item for item in results if item["status"] == "failed"]
+    completed = len(results) - len(failed)
+    progress(f"批量任务完成：成功 {completed}，失败 {len(failed)}；结果：{results_path}")
+    if failed:
+        raise BBVSError(f"批量任务有 {len(failed)} 个视频失败，详情见 {results_path}")
+    return results_path
+
+
+def run_source(
+    source: str, settings: AppSettings, progress: Progress = print, *, sleeper: Sleeper = sleep,
+) -> Path:
+    candidate = Path(source)
+    if candidate.suffix.casefold() == ".txt":
+        if not candidate.is_file():
+            raise FileNotFoundError(f"找不到批量清单: {candidate}")
+        return run_batch(candidate, settings, progress, sleeper=sleeper)
+    return run_pipeline(source, settings, progress, sleeper=sleeper)

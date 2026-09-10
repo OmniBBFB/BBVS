@@ -14,7 +14,7 @@ from .io import read_json
 @dataclass(frozen=True, slots=True)
 class ReportOptions:
     include_transcript: bool = False
-    max_images: int = 12
+    max_images: int | None = None
     expect_vision: bool = True
 
 
@@ -57,24 +57,24 @@ def _image_uri(path: Path) -> str:
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
-def _representative_frames(run_dir: Path, limit: int, frames_path: Path | None = None) -> list[dict[str, Any]]:
+def _representative_frames(run_dir: Path, limit: int | None, frames_path: Path | None = None) -> list[dict[str, Any]]:
     candidates = [frames_path] if frames_path else sorted(run_dir.glob("ocr-*.json"))
-    if not candidates or limit <= 0:
+    if not candidates or limit == 0:
         return []
     frames = [row for row in read_json(candidates[0]) if Path(row["path"]).exists()]
     informative = [row for row in frames if len(row.get("text", [])) >= 8] or frames
-    if len(informative) <= limit:
+    if limit is None or len(informative) <= limit:
         return informative
     indices = [round(index * (len(informative) - 1) / (limit - 1)) for index in range(limit)] if limit > 1 else [len(informative) // 2]
     return [informative[index] for index in indices]
 
 
 def _visual_timeline_cards(
-    run_dir: Path, analysis: Path, limit: int, frames_path: Path | None = None,
+    run_dir: Path, analysis: Path, limit: int | None, frames_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     visual_path = analysis / "visual-analysis.json"
     frame_candidates = [frames_path] if frames_path else sorted(run_dir.glob("ocr-*.json"))
-    if limit <= 0 or not visual_path.exists() or not frame_candidates:
+    if limit == 0 or not visual_path.exists() or not frame_candidates:
         return []
     frames = [row for row in read_json(frame_candidates[0]) if Path(row["path"]).exists()]
     cards = []
@@ -84,7 +84,7 @@ def _visual_timeline_cards(
         frame = min(frames, key=lambda row: abs(float(row["timestamp"]) - float(visual["timestamp"])))
         if abs(float(frame["timestamp"]) - float(visual["timestamp"])) <= 1.0:
             cards.append({**visual, "path": frame["path"], "ocr_text": frame.get("text", [])})
-    if len(cards) <= limit:
+    if limit is None or len(cards) <= limit:
         return cards
     indices = [round(index * (len(cards) - 1) / (limit - 1)) for index in range(limit)] if limit > 1 else [len(cards) // 2]
     return [cards[index] for index in indices]

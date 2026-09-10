@@ -1,5 +1,11 @@
 # BBVS
 
+设计与维护文档分为三层：
+
+- [`INTENT.md`](INTENT.md)：产品目标、优先级与取舍。
+- [`SPEC.md`](SPEC.md)：必须满足且可验收的行为。
+- [`IMPL.md`](IMPL.md)：当前实现、默认值与已知限制。
+
 这是一个面向实验的模块化视频理解项目。当前阶段先独立验证下载、媒体处理、关键帧、OCR 和 ASR；LLM/vLLM 只提供 OpenAI-compatible 客户端，不进入默认处理链。项目优先组合成熟的开源项目，不重新实现已有模型。
 
 完整的已实现行为、数据契约和验收标准见 [SPEC.md](SPEC.md)。
@@ -29,6 +35,18 @@ uv run bbvs run 'VIDEO_URL' --config config/pipeline-basic.yaml
 ```bash
 uv run bbvs run 'runs/<视频ID>-<标题>' --config config/pipeline-basic.yaml
 ```
+
+批量总结时仍使用同一个 `run` 命令。TXT 清单每行填写一个 BV 号，也支持完整的
+Bilibili 视频 URL、空行和以 `#` 开头的注释：
+
+```bash
+uv run bbvs run collections/3278335-bvids.txt \
+  --config config/pipeline-deepseek.yaml
+```
+
+视频会按清单顺序逐个处理；单个视频失败不会阻塞后续任务。进度持续写入
+`runs/batches/3278335-bvids.json`。重新执行同一命令时，已存在的阶段产物会自动复用，
+失败或未完成的视频从断点继续。批次中存在失败项时，全部条目处理完毕后命令返回非零状态。
 
 流水线按步骤保存实验产物：`audio/`、`keyframes/<variant>/`、`ocr/<variant>/`、
 `asr/<variant>/`、`analysis/<variant>/` 和 `reports/<variant>/`。同一配置再次运行会复用；

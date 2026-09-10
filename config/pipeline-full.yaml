@@ -40,4 +40,9 @@ asr:
   initial_prompt: null
   hotwords: null
 analysis: {verify: true, vision: true, summarize: true}
-report: {enabled: true, filename: final-report.pdf, include_transcript: true, max_images: 12}
+authoring:
+  evidence_window_seconds: 120
+  max_units_per_map: 4
+  max_candidate_frames_per_request: 12
+  selected_frames_per_request: 3
+report: {enabled: true, filename: final-report.pdf, include_transcript: true, max_images: null}

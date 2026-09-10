@@ -21,7 +21,7 @@ from .retrieval import search
 from .qa import answer_question
 from .report import ReportOptions, export_report
 from .llm import EmbeddingClient, RerankerClient
-from .runner import run_pipeline
+from .runner import run_source
 from .settings import AppSettings
 from .summarize import SUMMARY_PROMPT_VERSION
 
@@ -30,8 +30,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bbvs", description="BBVS 模块化视频理解工作台")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run_cmd = sub.add_parser("run", help="从 URL 一行运行完整流水线并生成报告")
-    run_cmd.add_argument("source", help="视频 URL，或用于断点续跑的已有 run 目录")
+    run_cmd = sub.add_parser("run", help="运行单个视频或 TXT 批量清单并生成报告")
+    run_cmd.add_argument("source", help="视频 URL、已有 run 目录，或每行一个 BV 号的 TXT 清单")
     run_cmd.add_argument("--config", type=Path, default=Path("config/pipeline-basic.yaml"))
 
     probe_cmd = sub.add_parser("probe", help="查看本地媒体信息")
@@ -128,7 +128,7 @@ def _emit(value: object, output: Path | None = None) -> None:
 
 def run(args: argparse.Namespace) -> None:
     if args.command == "run":
-        print(run_pipeline(args.source, AppSettings.load(args.config)))
+        print(run_source(args.source, AppSettings.load(args.config)))
     elif args.command == "probe":
         _emit(media.probe(args.video), args.output)
     elif args.command == "download":

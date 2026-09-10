@@ -7,6 +7,34 @@ from .llm import ChatModel, parse_json_content
 from .models import Evidence, Frame, Term
 
 
+def _evidence_rows(value: Any) -> list[Evidence]:
+    if not isinstance(value, list):
+        return []
+    rows = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                rows.append(Evidence(source="model", text=text))
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        timestamp = item.get("timestamp")
+        try:
+            timestamp = float(timestamp) if timestamp is not None else None
+        except (TypeError, ValueError):
+            timestamp = None
+        rows.append(Evidence(
+            source=str(item.get("source") or "model"),
+            text=text,
+            timestamp=timestamp,
+        ))
+    return rows
+
+
 def discover_terms(
     metadata: dict[str, Any], frames: list[Frame], client: ChatModel, model: str,
     max_ocr_chars: int = 6_000,
@@ -27,11 +55,11 @@ Do not invent terms. Deduplicate aliases. Include exactly one evidence item per 
         messages=[{"role": "system", "content": "You extract auditable terminology."}, {"role": "user", "content": prompt}],
         max_tokens=3072,
         response_format={"type": "json_object"},
-        extra_body={"reasoning_effort": "low"},
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     ))
     terms = []
     for item in payload.get("terms", []):
-        term_evidence = [Evidence(**row) for row in item.get("evidence", [])]
+        term_evidence = _evidence_rows(item.get("evidence", []))
         terms.append(Term(
             canonical_name=str(item["canonical_name"]).strip(),
             category=str(item.get("category", "other")),

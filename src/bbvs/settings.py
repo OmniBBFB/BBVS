@@ -37,6 +37,25 @@ class AnalysisSettings:
     verify: bool = True
     vision: bool = False
     summarize: bool = True
+    authoring: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoringSettings:
+    evidence_window_seconds: float = 120.0
+    max_units_per_map: int = 4
+    max_candidate_frames_per_request: int = 12
+    selected_frames_per_request: int = 3
+
+    def __post_init__(self) -> None:
+        if self.evidence_window_seconds <= 0:
+            raise ValueError("authoring.evidence_window_seconds 必须为正数")
+        if self.max_units_per_map < 1:
+            raise ValueError("authoring.max_units_per_map 必须至少为 1")
+        if self.max_candidate_frames_per_request < 1:
+            raise ValueError("authoring.max_candidate_frames_per_request 必须至少为 1")
+        if not 1 <= self.selected_frames_per_request <= self.max_candidate_frames_per_request:
+            raise ValueError("authoring.selected_frames_per_request 必须在 1 和候选帧数之间")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +63,7 @@ class ReportSettings:
     enabled: bool = True
     filename: str = "final-report.pdf"
     include_transcript: bool = True
-    max_images: int = 12
+    max_images: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +90,7 @@ class AppSettings:
     ocr: OCRSettings = field(default_factory=OCRSettings)
     asr: ASRSettings = field(default_factory=ASRSettings)
     analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
+    authoring: AuthoringSettings = field(default_factory=AuthoringSettings)
     report: ReportSettings = field(default_factory=ReportSettings)
     retry: RetrySettings = field(default_factory=RetrySettings)
 
@@ -93,6 +113,7 @@ class AppSettings:
             ocr=OCRSettings(**section("ocr")),
             asr=ASRSettings(**section("asr")),
             analysis=AnalysisSettings(**section("analysis")),
+            authoring=AuthoringSettings(**section("authoring")),
             report=ReportSettings(**section("report")),
             retry=RetrySettings(**section("retry")),
         )

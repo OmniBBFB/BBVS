@@ -79,6 +79,41 @@ class VisualAnalysis:
 
 
 @dataclass(slots=True)
+class EvidenceUnit:
+    """A lossless-enough authoring envelope; never treated as a chapter."""
+
+    unit_id: str
+    start: float
+    end: float
+    speech: str
+    screen_text: list[str] = field(default_factory=list)
+    source_chapter: str | None = None
+
+
+@dataclass(slots=True)
+class ContentMap:
+    unit_id: str
+    teaching_goal: str = ""
+    claims: list[str] = field(default_factory=list)
+    mechanisms: list[str] = field(default_factory=list)
+    examples: list[str] = field(default_factory=list)
+    formulas_or_code: list[str] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
+    visual_requests: list[dict[str, Any]] = field(default_factory=list)
+    uncertainties: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class OutlineChapter:
+    title: str
+    start_unit: str
+    end_unit: str
+    teaching_goal: str = ""
+    required_units: list[str] = field(default_factory=list)
+    visual_requests: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class TimelineSegment:
     start: float
     end: float

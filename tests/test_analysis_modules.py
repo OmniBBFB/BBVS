@@ -14,8 +14,13 @@ from bbvs.vision import translate_visual_summaries
 
 
 class FakeChat:
-    def __init__(self, responses): self.responses = iter(responses)
-    def chat(self, **kwargs): return json.dumps(next(self.responses))
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.requests = []
+
+    def chat(self, **kwargs):
+        self.requests.append(kwargs)
+        return json.dumps(next(self.responses))
 
 
 class RawFakeChat:
@@ -32,6 +37,21 @@ def test_terminology_is_converted_to_domain_models() -> None:
     terms = discover_terms({"title": "Lecture"}, [Frame("x", 10, text=["Federal Reserve"])], client, "m")
     assert terms[0].canonical_name == "Federal Reserve"
     assert terms[0].evidence[0].timestamp == 10.0
+
+
+def test_terminology_normalizes_string_evidence_and_disables_thinking() -> None:
+    client = FakeChat([{"terms": [{
+        "canonical_name": "Git", "category": "concept",
+        "confidence": 0.8, "evidence": ["Git repository"],
+    }]}])
+
+    terms = discover_terms({"title": "Git"}, [], client, "m")
+
+    assert terms[0].evidence[0].source == "model"
+    assert terms[0].evidence[0].text == "Git repository"
+    assert client.requests[0]["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
 
 
 def test_verifier_only_applies_high_confidence_exact_replacements() -> None:

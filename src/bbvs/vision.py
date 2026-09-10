@@ -11,7 +11,7 @@ _VISUAL_REFERENCES = ("here", "there", "this chart", "this graph", "on the right
 
 
 def select_visual_frames(
-    frames: list[Frame], transcript: Transcript, max_frames: int = 24, min_gap: float = 20.0,
+    frames: list[Frame], transcript: Transcript, max_frames: int | None = None, min_gap: float = 20.0,
 ) -> list[Frame]:
     candidates: list[Frame] = []
     for frame in frames:
@@ -22,7 +22,7 @@ def select_visual_frames(
             not candidates or frame.timestamp - candidates[-1].timestamp >= min_gap
         ):
             candidates.append(frame)
-    if len(candidates) <= max_frames:
+    if max_frames is None or len(candidates) <= max_frames:
         return candidates
     if max_frames == 1:
         return [candidates[len(candidates) // 2]]

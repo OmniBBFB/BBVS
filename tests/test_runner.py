@@ -5,7 +5,11 @@ import pytest
 from bbvs.config import Endpoint, Services
 from bbvs.errors import BBVSError
 from bbvs.models import Frame, Transcript, TranscriptSegment
-from bbvs.runner import AnalysisStage, PipelineStage, StageContext, _resolve_run_dir, run_pipeline
+from bbvs.io import read_json
+from bbvs.runner import (
+    AnalysisStage, PipelineStage, StageContext, _batch_run_dir, _manifest_sources, _resolve_run_dir,
+    run_batch, run_pipeline, run_source,
+)
 from bbvs.settings import AppSettings, RetrySettings
 
 
@@ -15,6 +19,72 @@ def test_resolve_run_dir_accepts_name_relative_to_configured_runs_dir(tmp_path: 
     expected.mkdir(parents=True)
 
     assert _resolve_run_dir("BV1-标题", runs_dir) == expected.resolve()
+
+
+def test_manifest_parses_bvids_urls_comments_and_duplicates(tmp_path: Path) -> None:
+    manifest = tmp_path / "videos.txt"
+    manifest.write_text(
+        "# season\nBV1E1xxebEDs\n\nhttps://www.bilibili.com/video/BV1Nh1BYKEEA?p=1\n"
+        "BV1E1xxebEDs\n",
+        encoding="utf-8",
+    )
+
+    assert _manifest_sources(manifest) == [
+        ("BV1E1xxebEDs", "https://www.bilibili.com/video/BV1E1xxebEDs"),
+        ("BV1Nh1BYKEEA", "https://www.bilibili.com/video/BV1Nh1BYKEEA"),
+    ]
+
+
+def test_batch_continues_after_video_failure_and_saves_progress(tmp_path: Path) -> None:
+    manifest = tmp_path / "season.txt"
+    manifest.write_text("BV1E1xxebEDs\nBV1Nh1BYKEEA\n", encoding="utf-8")
+    settings = AppSettings(
+        services=Services(Endpoint("http://llm/v1", "m")), runs_dir=tmp_path / "runs",
+    )
+    calls = []
+
+    def fake_runner(source, settings, progress, sleeper):
+        calls.append(source)
+        if source.endswith("BV1E1xxebEDs"):
+            raise BBVSError("model unavailable")
+        return settings.runs_dir / "BV1Nh1BYKEEA-title"
+
+    with pytest.raises(BBVSError, match="1 个视频失败"):
+        run_batch(manifest, settings, progress=lambda message: None, runner=fake_runner)
+
+    assert len(calls) == 2
+    payload = read_json(settings.runs_dir / "batches" / "season.json")
+    assert [item["status"] for item in payload["items"]] == ["failed", "completed"]
+
+
+def test_batch_reuses_run_directory_matching_bvid(tmp_path: Path) -> None:
+    manifest = tmp_path / "season.txt"
+    manifest.write_text("BV1E1xxebEDs\n", encoding="utf-8")
+    settings = AppSettings(
+        services=Services(Endpoint("http://llm/v1", "m")), runs_dir=tmp_path / "runs",
+    )
+    existing = settings.runs_dir / "BV1E1xxebEDs-title"
+    existing.mkdir(parents=True)
+    received = []
+
+    def fake_runner(source, settings, progress, sleeper):
+        received.append(source)
+        return Path(source)
+
+    run_batch(manifest, settings, progress=lambda message: None, runner=fake_runner)
+
+    assert received == [str(existing.resolve())]
+    assert _batch_run_dir(settings.runs_dir, "BV1E1xxebEDs") == existing.resolve()
+
+
+def test_run_source_treats_txt_as_batch_manifest(monkeypatch, tmp_path: Path) -> None:
+    manifest = tmp_path / "season.txt"
+    manifest.write_text("BV1E1xxebEDs\n", encoding="utf-8")
+    expected = tmp_path / "result.json"
+    monkeypatch.setattr("bbvs.runner.run_batch", lambda *args, **kwargs: expected)
+    settings = AppSettings(services=Services(Endpoint("http://llm/v1", "m")))
+
+    assert run_source(str(manifest), settings) == expected
 
 
 def test_one_command_runner_executes_all_stages(monkeypatch, tmp_path: Path) -> None:

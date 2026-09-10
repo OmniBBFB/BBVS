@@ -7,17 +7,22 @@ from .config import Services
 from .artifacts import find_inputs
 from .io import read_json, write_json
 from .llm import EmbeddingClient, RerankerClient, create_chat_client
-from .models import Chapter, Correction, Evidence, Frame, Term, TimelineSegment, Transcript, VisualAnalysis
+from .models import Chapter, Correction, Frame, Term, TimelineSegment, Transcript, VisualAnalysis
 from .summarize import summarize_timeline
-from .terminology import discover_terms
+from .terminology import _evidence_rows, discover_terms
 from .timeline import build_timeline
 from .transcript import from_dict
 from .verification import verify_transcript
 from .vision import analyze_frames, select_visual_frames, translate_visual_summaries
+from .authoring import (
+    build_evidence_units, draft_chapters, map_content, plan_outline, review_coverage,
+    select_requested_frames, synthesize,
+)
+from .settings import AuthoringSettings
 
 
 def _terms(payload: list[dict]) -> list[Term]:
-    return [Term(**{**item, "evidence": [Evidence(**row) for row in item.get("evidence", [])]}) for item in payload]
+    return [Term(**{**item, "evidence": _evidence_rows(item.get("evidence", []))}) for item in payload]
 
 
 def _timeline(payload: list[dict]) -> list[TimelineSegment]:
@@ -49,6 +54,7 @@ class VideoPipeline:
         self, run_dir: Path, *, verify: bool = False, vision: bool = False,
         summarize: bool = False, transcript_path: Path | None = None,
         frames_path: Path | None = None, analysis_dir: Path | None = None,
+        authoring: bool = False, authoring_settings: AuthoringSettings | None = None,
     ) -> Path:
         analysis_dir = analysis_dir or run_dir / "analysis"
         analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +100,31 @@ class VideoPipeline:
                 write_json(analysis_dir / "corrections.json", [asdict(row) for row in corrections])
 
         visuals: list[VisualAnalysis] = []
+        authoring_settings = authoring_settings or AuthoringSettings()
+        units = []
+        content_maps = []
+        outline_payload: dict = {}
+        outline = []
+        if authoring and summarize:
+            units = build_evidence_units(
+                transcript, frames, metadata.get("chapters"), authoring_settings.evidence_window_seconds,
+            )
+            content_maps = map_content(
+                units, self.llm, self.services.llm.model, authoring_settings.max_units_per_map,
+            )
+            outline_payload, outline = plan_outline(
+                units, content_maps, metadata, self.llm, self.services.llm.model,
+            )
+            write_json(analysis_dir / "evidence-units.json", [asdict(row) for row in units])
+            write_json(analysis_dir / "content-map.json", [asdict(row) for row in content_maps])
+            write_json(analysis_dir / "outline.json", outline_payload)
+
+        requested_frames = (
+            select_requested_frames(
+                units, content_maps, frames, authoring_settings.max_candidate_frames_per_request,
+                authoring_settings.selected_frames_per_request,
+            ) if authoring and content_maps else []
+        )
         if vision:
             if not self.vlm or not self.services.vlm:
                 raise ValueError("--vision 需要配置 vlm endpoint")
@@ -104,13 +135,41 @@ class VideoPipeline:
                     visuals = translate_visual_summaries(visuals, self.llm, self.services.llm.model)
                     write_json(visual_path, [asdict(row) for row in visuals])
             else:
-                selected = select_visual_frames(frames, transcript)
+                selected = requested_frames or select_visual_frames(frames, transcript, max_frames=None)
                 visuals = analyze_frames(selected, self.vlm, self.services.vlm.model)
                 write_json(visual_path, [asdict(row) for row in visuals])
+        elif requested_frames:
+            visual_path = analysis_dir / "visual-analysis.json"
+            unit_by_time = lambda timestamp: next(
+                (unit for unit in units if unit.start <= timestamp < unit.end), None
+            )
+            maps_by_id = {row.unit_id: row for row in content_maps}
+            for frame in requested_frames:
+                unit = unit_by_time(frame.timestamp)
+                content = maps_by_id.get(unit.unit_id) if unit else None
+                descriptions = [str(row.get("description", "")) for row in (content.visual_requests if content else [])]
+                if content and content.formulas_or_code and not descriptions:
+                    descriptions = ["公式或代码原始画面候选"]
+                visuals.append(VisualAnalysis(
+                    timestamp=frame.timestamp,
+                    summary="；".join(value for value in descriptions if value) or "字幕语义定位的原始画面候选",
+                    visual_type="semantic_candidate_unverified",
+                ))
+            write_json(visual_path, [asdict(row) for row in visuals])
 
         timeline = build_timeline(transcript, frames, terms, visuals)
         write_json(analysis_dir / "timeline.json", [asdict(row) for row in timeline])
-        if summarize:
+        if summarize and authoring:
+            chapters = draft_chapters(
+                units, content_maps, outline, visuals, self.llm, self.services.llm.model,
+            )
+            write_json(analysis_dir / "chapters.json", [asdict(row) for row in chapters])
+            review = review_coverage(content_maps, chapters, self.llm, self.services.llm.model)
+            write_json(analysis_dir / "review.json", review)
+            report = synthesize(chapters, outline_payload, self.llm, self.services.llm.model)
+            report["source_language"] = transcript.language
+            write_json(analysis_dir / "summary.json", report)
+        elif summarize:
             summary_path = analysis_dir / "summary.json"
             summary_mode_path = analysis_dir / "summary-mode.json"
             chinese_source = (transcript.language or "").casefold().startswith(("zh", "cmn", "yue"))

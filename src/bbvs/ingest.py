@@ -21,6 +21,8 @@ def download(url: str, output_dir: Path) -> tuple[Path, dict[str, Any]]:
             "--write-info-json",
             "--write-subs",
             "--write-auto-subs",
+            "--convert-subs",
+            "srt",
             "--sub-langs",
             "all,-live_chat",
             "--merge-output-format",
@@ -58,8 +60,21 @@ def download(url: str, output_dir: Path) -> tuple[Path, dict[str, Any]]:
             "duration",
             "uploader",
             "upload_date",
+            "language",
         )
     }
+    manual_languages = set((metadata.get("subtitles") or {}).keys())
+    automatic_languages = set((metadata.get("automatic_captions") or {}).keys())
+    requested_subtitles = metadata.get("requested_subtitles") or {}
+    compact["subtitle_tracks"] = [
+        {
+            "language": language,
+            "kind": "manual" if language in manual_languages else "automatic",
+            "filename": Path(str(details.get("filepath", f"source.{language}.srt"))).name,
+        }
+        for language, details in requested_subtitles.items()
+        if language in manual_languages or language in automatic_languages
+    ]
     write_json(output_dir / "metadata.json", compact)
     return media.resolve(), compact
 
