@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from collections.abc import Callable
 from typing import Any
 
 from .llm import ChatModel, parse_json_content
@@ -46,10 +47,14 @@ def build_evidence_units(
 
 def map_content(
     units: list[EvidenceUnit], client: ChatModel, model: str, batch_size: int = 4,
+    existing_maps: list[ContentMap] | None = None,
+    checkpoint: Callable[[list[ContentMap]], None] | None = None,
 ) -> list[ContentMap]:
-    maps: list[ContentMap] = []
-    for start in range(0, len(units), batch_size):
-        batch = units[start:start + batch_size]
+    maps = list(existing_maps or [])
+    completed_ids = {row.unit_id for row in maps}
+    pending = [row for row in units if row.unit_id not in completed_ids]
+    for start in range(0, len(pending), batch_size):
+        batch = pending[start:start + batch_size]
         prompt = (
             "Create a high-recall content map for every evidence unit. Do not summarize for brevity and do not "
             "invent facts. Preserve concrete claims, mechanisms, examples, counterexamples, limitations, formulas "
@@ -77,6 +82,8 @@ def map_content(
                 visual_requests=[value for value in row.get("visual_requests", []) if isinstance(value, dict)],
                 uncertainties=[str(value) for value in row.get("uncertainties", [])],
             ))
+        if checkpoint:
+            checkpoint(maps)
     return maps
 
 
@@ -121,9 +128,11 @@ def plan_outline(
     prompt = (
         "Design a global teaching outline from the content maps. Reorganize by conceptual dependency rather than "
         "fixed time windows, while keeping every chapter backed by a contiguous source range. Preserve all high-value "
-        "claims, examples, formulas/code and closing limitations. Return JSON with central_question, thesis, "
-        "concept_dependencies, must_preserve, and chapters. Each chapter uses title, start_unit, end_unit, "
-        "teaching_goal, required_units, visual_requests. Every unit must belong to exactly one chapter and unit ranges "
+        "claims, examples, formulas/code and closing limitations. Keep the output bounded: concept_dependencies "
+        "must be an array of at most 12 short strings; must_preserve at most 20 short strings. Return JSON with "
+        "exactly central_question, thesis, concept_dependencies, must_preserve, and chapters. Each chapter uses "
+        "exactly title, start_unit, end_unit, teaching_goal, required_units, visual_requests. "
+        "Every unit must belong to exactly one chapter and unit ranges "
         "must be ordered, contiguous and non-overlapping.\n"
         + json.dumps({"metadata": metadata, "units": unit_ranges,
                       "content_maps": [asdict(row) for row in maps]}, ensure_ascii=False)
@@ -131,7 +140,7 @@ def plan_outline(
     payload = parse_json_content(client.chat(
         model=model, messages=[{"role": "system", "content": "You are the lead editor of a rigorous course note."},
                                {"role": "user", "content": prompt}],
-        max_tokens=4096, response_format={"type": "json_object"},
+        max_tokens=8192, response_format={"type": "json_object"},
     ))
     chapters = [OutlineChapter(
         title=str(row.get("title", "")), start_unit=str(row.get("start_unit", "")),
@@ -161,11 +170,13 @@ def _validate_outline(units: list[EvidenceUnit], chapters: list[OutlineChapter])
 def draft_chapters(
     units: list[EvidenceUnit], maps: list[ContentMap], outline: list[OutlineChapter],
     visuals: list[VisualAnalysis], client: ChatModel, model: str,
+    existing_chapters: list[Chapter] | None = None,
+    checkpoint: Callable[[list[Chapter]], None] | None = None,
 ) -> list[Chapter]:
     positions = {row.unit_id: index for index, row in enumerate(units)}
     maps_by_id = {row.unit_id: row for row in maps}
-    result: list[Chapter] = []
-    for chapter in outline:
+    result = list(existing_chapters or [])
+    for chapter in outline[len(result):]:
         left, right = positions[chapter.start_unit], positions[chapter.end_unit]
         source_units = units[left:right + 1]
         chapter_visuals = [asdict(row) for row in visuals
@@ -193,35 +204,59 @@ def draft_chapters(
             end=source_units[-1].end, summary=str(payload.get("summary", "")),
             key_points=[str(value) for value in payload.get("key_points", [])],
         ))
+        if checkpoint:
+            checkpoint(result)
     return result
 
 
 def review_coverage(
-    maps: list[ContentMap], chapters: list[Chapter], client: ChatModel, model: str,
+    units: list[EvidenceUnit], maps: list[ContentMap], chapters: list[Chapter],
+    client: ChatModel, model: str,
+    existing_reviews: list[dict[str, Any]] | None = None,
+    checkpoint: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> dict[str, Any]:
-    prompt = (
-        "Audit these drafted chapters against the high-recall content maps. Report omissions and distortions; do not "
-        "rewrite prose. Return JSON with missing_claims, missing_examples, missing_formulas_or_code, distortions, "
-        "unsupported_claims, and coherence_issues.\n"
-        + json.dumps({"content_maps": [asdict(row) for row in maps],
-                      "chapters": [asdict(row) for row in chapters]}, ensure_ascii=False)
+    maps_by_id = {row.unit_id: row for row in maps}
+    reviews = list(existing_reviews or [])
+    for chapter in chapters[len(reviews):]:
+        chapter_units = [row for row in units if row.end > chapter.start and row.start < chapter.end]
+        prompt = (
+            "Audit this single drafted chapter against its high-recall content maps. Report only material omissions "
+            "and distortions, not wording preferences. Keep every array to at most 12 concise items. Return JSON with "
+            "exactly missing_claims, missing_examples, missing_formulas_or_code, distortions, unsupported_claims, "
+            "and coherence_issues.\n" + json.dumps({
+                "content_maps": [asdict(maps_by_id[row.unit_id]) for row in chapter_units],
+                "chapter": asdict(chapter),
+            }, ensure_ascii=False)
+        )
+        review = parse_json_content(client.chat(
+            model=model,
+            messages=[{"role": "system", "content": "You are an independent evidence coverage reviewer."},
+                      {"role": "user", "content": prompt}],
+            max_tokens=4096, response_format={"type": "json_object"},
+        ))
+        reviews.append({"chapter": chapter.title, **review})
+        if checkpoint:
+            checkpoint(reviews)
+    keys = (
+        "missing_claims", "missing_examples", "missing_formulas_or_code", "distortions",
+        "unsupported_claims", "coherence_issues",
     )
-    return parse_json_content(client.chat(
-        model=model, messages=[{"role": "system", "content": "You are an independent evidence coverage reviewer."},
-                               {"role": "user", "content": prompt}],
-        max_tokens=4096, response_format={"type": "json_object"},
-    ))
+    return {"chapters": reviews, **{
+        key: [f"{row['chapter']}: {item}" for row in reviews for item in row.get(key, [])]
+        for key in keys
+    }}
 
 
 def synthesize(chapters: list[Chapter], outline: dict[str, Any], client: ChatModel, model: str) -> dict[str, Any]:
     prompt = (
         "Create a Chinese global synthesis from these completed teaching chapters and their outline. Preserve the "
         "reasoning chain and cross-chapter connections; do not compress away important qualifications. Return JSON "
-        "with summary, key_concepts, takeaways.\n"
+        "with exactly summary, key_concepts, takeaways. Keep key_concepts and takeaways to at most 12 concise "
+        "items each.\n"
         + json.dumps({"outline": outline, "chapters": [asdict(row) for row in chapters]}, ensure_ascii=False)
     )
     report = parse_json_content(client.chat(
-        model=model, messages=[{"role": "user", "content": prompt}], max_tokens=4096,
+        model=model, messages=[{"role": "user", "content": prompt}], max_tokens=8192,
         response_format={"type": "json_object"},
     ))
     report.update({"source_language": "zh", "translation_mode": "monolingual",

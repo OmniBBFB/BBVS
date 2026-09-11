@@ -93,6 +93,11 @@ def test_basic_report_does_not_warn_about_intentionally_disabled_vision(tmp_path
         "title": "Chapter", "start": 0, "end": 60, "summary": "Done", "key_points": [],
     }])
     write_json(run / "analysis" / "verified-transcript.json", {"segments": []})
-    document = build_html(run, ReportOptions(max_images=0, expect_vision=False))
+    write_json(run / "analysis" / "visual-analysis.json", [{
+        "timestamp": 42, "summary": "stale unverified visual", "visual_type": "semantic_candidate_unverified",
+    }])
+    document = build_html(run, ReportOptions(expect_vision=False))
     assert "尚未运行" not in document
     assert "视觉分析" not in document
+    assert "图文时间轴" not in document
+    assert "stale unverified visual" not in document

@@ -85,6 +85,25 @@ class OpenAICompatibleClient:
 class DeepSeekCompatibleClient(OpenAICompatibleClient):
     """OpenAI-compatible chat adapter that translates DeepSeek-specific options."""
 
+    def chat(
+        self, *, model: str, messages: list[Message], temperature: float = 0.0,
+        max_tokens: int = 2048, response_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> str:
+        options = dict(extra_body or {})
+        template = options.get("chat_template_kwargs")
+        explicit_thinking = (
+            "reasoning_effort" in options
+            or "thinking" in options
+            or isinstance(template, dict) and "enable_thinking" in template
+        )
+        if response_format is not None and not explicit_thinking:
+            options["chat_template_kwargs"] = {"enable_thinking": False}
+        return super().chat(
+            model=model, messages=messages, temperature=temperature, max_tokens=max_tokens,
+            response_format=response_format, extra_body=options,
+        )
+
     def _provider_body(self, extra_body: dict[str, Any] | None) -> dict[str, Any]:
         body = dict(extra_body or {})
         template = body.pop("chat_template_kwargs", None)

@@ -44,6 +44,18 @@ def test_deepseek_client_translates_non_thinking_parameter() -> None:
     assert "chat_template_kwargs" not in payload
 
 
+def test_deepseek_structured_output_disables_thinking_by_default() -> None:
+    body = {"choices": [{"message": {"content": '{"ok":true}'}}]}
+    with patch("urllib.request.urlopen", return_value=Response(json.dumps(body).encode())) as call:
+        DeepSeekCompatibleClient("https://api.deepseek.com", "secret").chat(
+            model="deepseek-v4-flash", messages=[{"role": "user", "content": "Return JSON"}],
+            response_format={"type": "json_object"},
+        )
+
+    payload = json.loads(call.call_args.args[0].data)
+    assert payload["thinking"] == {"type": "disabled"}
+
+
 def test_deepseek_client_translates_reasoning_effort() -> None:
     body = {"choices": [{"message": {"content": "{}"}}]}
     with patch("urllib.request.urlopen", return_value=Response(json.dumps(body).encode())) as call:

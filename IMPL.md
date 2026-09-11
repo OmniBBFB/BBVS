@@ -37,12 +37,14 @@ Transcript + OCR → EvidenceUnit → ContentMap → Global Outline
 `preferred_platform_transcript()`；找到可解析 SRT 时直接生成统一 `Transcript`，否则运行配置的 ASR adapter。
 
 旧运行目录如果没有 `subtitle_tracks` 元数据，不会猜测字幕来源，会继续使用 ASR。重新下载可获得新字段。
+Bilibili 登录字幕可通过 `download.cookies_from_browser` 或 `download.cookies_file` 显式启用；两者互斥，默认均关闭。
+Linux Chrome 通常配置为 `chrome+gnomekeyring`，`download` extra 包含其 cookie 解密依赖 `secretstorage`。
 
 ## 视觉与公式
 
 初始候选仍由 FFmpeg scene score 产生。ContentMap 根据字幕/OCR 生成带时间区间的视觉需求。
-每个请求在局部范围内按 OCR 信息量和较晚时间优先，保留至多 3 个不同候选。没有 VLM 时，这些候选
-仍以 `semantic_candidate_unverified` 写入图文报告；有 VLM 时再做视觉解释与验证。
+每个请求在局部范围内按 OCR 信息量和较晚时间优先选择候选，再交给 VLM 做视觉解释。
+没有配置或启用 VLM 时，整个图文时间轴关闭，不生成 `semantic_candidate_unverified`，也不展示历史残留的视觉候选。
 
 当前不转录公式，也没有数学 OCR。公式相关 speech/OCR 会生成 `formula or code slide` 请求，目标是让原始公式
 PPT 进入候选与报告。后续可增加固定间隔补采样、感知哈希聚类和 progressive-reveal 稳定性评分。

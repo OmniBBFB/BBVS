@@ -94,7 +94,10 @@ def test_one_command_runner_executes_all_stages(monkeypatch, tmp_path: Path) -> 
     video.write_bytes(b"video")
     events = []
 
-    monkeypatch.setattr("bbvs.runner.ingest.download_to_run", lambda source, root: (run_dir, video, {}))
+    monkeypatch.setattr(
+        "bbvs.runner.ingest.download_to_run",
+        lambda source, root, **options: (run_dir, video, {}),
+    )
     monkeypatch.setattr("bbvs.runner.media.extract_audio", lambda source, output: output.write_bytes(b"wav") or output)
     monkeypatch.setattr(
         "bbvs.runner.keyframes.extract_keyframes",

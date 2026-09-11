@@ -10,6 +10,8 @@ from typing import Any, Protocol
 from .errors import DependencyError
 from .io import read_json
 
+REPORT_VERSION = "vlm-verified-visuals-v2"
+
 
 @dataclass(frozen=True, slots=True)
 class ReportOptions:
@@ -193,7 +195,10 @@ def build_html(
     )
     terms_html = f'<h2>术语表</h2><table><thead><tr><th>术语</th><th>类别</th><th>置信度</th><th>证据</th></tr></thead><tbody>{term_rows}</tbody></table>' if terms else ""
 
-    frames = _visual_timeline_cards(run_dir, analysis, options.max_images, frames_path)
+    frames = (
+        _visual_timeline_cards(run_dir, analysis, options.max_images, frames_path)
+        if options.expect_vision else []
+    )
     gallery = ""
     if frames:
         figures = "".join(

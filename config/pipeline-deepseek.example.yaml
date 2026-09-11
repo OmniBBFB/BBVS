@@ -2,6 +2,13 @@
 # config/pipeline-basic.yaml 已被 Git 忽略，可以保存本地凭据。
 runs_dir: runs
 
+# Bilibili 登录后字幕/高清格式需要 cookies。Linux Chrome 通常使用
+# chrome+gnomekeyring（download extra 已包含 secretstorage）；其他桌面可尝试 chrome。
+# 服务器环境建议导出 Netscape cookies 文件并设置 cookies_file。
+download:
+  cookies_from_browser: null
+  cookies_file: null
+
 retry:
   attempts: 3
   initial_delay: 2

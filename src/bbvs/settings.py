@@ -10,6 +10,16 @@ from .config import Services
 
 
 @dataclass(frozen=True, slots=True)
+class DownloadSettings:
+    cookies_from_browser: str | None = None
+    cookies_file: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.cookies_from_browser and self.cookies_file:
+            raise ValueError("download.cookies_from_browser 和 download.cookies_file 不能同时设置")
+
+
+@dataclass(frozen=True, slots=True)
 class KeyframeSettings:
     threshold: float = 0.25
     max_frames: int = 500
@@ -86,6 +96,7 @@ class RetrySettings:
 class AppSettings:
     services: Services
     runs_dir: Path = Path("runs")
+    download: DownloadSettings = field(default_factory=DownloadSettings)
     keyframes: KeyframeSettings = field(default_factory=KeyframeSettings)
     ocr: OCRSettings = field(default_factory=OCRSettings)
     asr: ASRSettings = field(default_factory=ASRSettings)
@@ -109,6 +120,7 @@ class AppSettings:
         return cls(
             services=Services.from_dict(section("services")),
             runs_dir=Path(payload.get("runs_dir", "runs")),
+            download=DownloadSettings(**section("download")),
             keyframes=KeyframeSettings(**section("keyframes")),
             ocr=OCRSettings(**section("ocr")),
             asr=ASRSettings(**section("asr")),

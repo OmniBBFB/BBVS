@@ -1,4 +1,6 @@
-from bbvs.settings import AppSettings
+import pytest
+
+from bbvs.settings import AppSettings, DownloadSettings
 
 
 def test_yaml_config_loads_complete_basic_pipeline(tmp_path) -> None:
@@ -35,3 +37,8 @@ def test_yaml_config_rejects_non_mapping_section(tmp_path) -> None:
         assert "services" in str(exc)
     else:
         raise AssertionError("invalid config should fail")
+
+
+def test_download_cookie_sources_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="不能同时设置"):
+        DownloadSettings(cookies_from_browser="chrome", cookies_file="cookies.txt")

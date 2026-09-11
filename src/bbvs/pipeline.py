@@ -7,7 +7,10 @@ from .config import Services
 from .artifacts import find_inputs
 from .io import read_json, write_json
 from .llm import EmbeddingClient, RerankerClient, create_chat_client
-from .models import Chapter, Correction, Frame, Term, TimelineSegment, Transcript, VisualAnalysis
+from .models import (
+    Chapter, ContentMap, Correction, EvidenceUnit, Frame, OutlineChapter, Term,
+    TimelineSegment, Transcript, VisualAnalysis,
+)
 from .summarize import summarize_timeline
 from .terminology import _evidence_rows, discover_terms
 from .timeline import build_timeline
@@ -106,24 +109,42 @@ class VideoPipeline:
         outline_payload: dict = {}
         outline = []
         if authoring and summarize:
-            units = build_evidence_units(
-                transcript, frames, metadata.get("chapters"), authoring_settings.evidence_window_seconds,
+            units_path = analysis_dir / "evidence-units.json"
+            maps_path = analysis_dir / "content-map.json"
+            outline_path = analysis_dir / "outline.json"
+            units = (
+                [EvidenceUnit(**row) for row in read_json(units_path)] if units_path.exists()
+                else build_evidence_units(
+                    transcript, frames, metadata.get("chapters"), authoring_settings.evidence_window_seconds,
+                )
             )
+            write_json(units_path, [asdict(row) for row in units])
+            existing_maps = [ContentMap(**row) for row in read_json(maps_path)] if maps_path.exists() else []
+            save_maps = lambda rows: write_json(maps_path, [asdict(row) for row in rows])
             content_maps = map_content(
                 units, self.llm, self.services.llm.model, authoring_settings.max_units_per_map,
+                existing_maps=existing_maps, checkpoint=save_maps,
             )
-            outline_payload, outline = plan_outline(
-                units, content_maps, metadata, self.llm, self.services.llm.model,
-            )
-            write_json(analysis_dir / "evidence-units.json", [asdict(row) for row in units])
-            write_json(analysis_dir / "content-map.json", [asdict(row) for row in content_maps])
-            write_json(analysis_dir / "outline.json", outline_payload)
+            save_maps(content_maps)
+            if outline_path.exists():
+                outline_payload = read_json(outline_path)
+                outline = [OutlineChapter(
+                    title=str(row.get("title", "")), start_unit=str(row.get("start_unit", "")),
+                    end_unit=str(row.get("end_unit", "")), teaching_goal=str(row.get("teaching_goal", "")),
+                    required_units=[str(value) for value in row.get("required_units", [])],
+                    visual_requests=[value for value in row.get("visual_requests", []) if isinstance(value, dict)],
+                ) for row in outline_payload.get("chapters", [])]
+            else:
+                outline_payload, outline = plan_outline(
+                    units, content_maps, metadata, self.llm, self.services.llm.model,
+                )
+                write_json(outline_path, outline_payload)
 
         requested_frames = (
             select_requested_frames(
                 units, content_maps, frames, authoring_settings.max_candidate_frames_per_request,
                 authoring_settings.selected_frames_per_request,
-            ) if authoring and content_maps else []
+            ) if vision and authoring and content_maps else []
         )
         if vision:
             if not self.vlm or not self.services.vlm:
@@ -138,37 +159,33 @@ class VideoPipeline:
                 selected = requested_frames or select_visual_frames(frames, transcript, max_frames=None)
                 visuals = analyze_frames(selected, self.vlm, self.services.vlm.model)
                 write_json(visual_path, [asdict(row) for row in visuals])
-        elif requested_frames:
-            visual_path = analysis_dir / "visual-analysis.json"
-            unit_by_time = lambda timestamp: next(
-                (unit for unit in units if unit.start <= timestamp < unit.end), None
-            )
-            maps_by_id = {row.unit_id: row for row in content_maps}
-            for frame in requested_frames:
-                unit = unit_by_time(frame.timestamp)
-                content = maps_by_id.get(unit.unit_id) if unit else None
-                descriptions = [str(row.get("description", "")) for row in (content.visual_requests if content else [])]
-                if content and content.formulas_or_code and not descriptions:
-                    descriptions = ["公式或代码原始画面候选"]
-                visuals.append(VisualAnalysis(
-                    timestamp=frame.timestamp,
-                    summary="；".join(value for value in descriptions if value) or "字幕语义定位的原始画面候选",
-                    visual_type="semantic_candidate_unverified",
-                ))
-            write_json(visual_path, [asdict(row) for row in visuals])
 
         timeline = build_timeline(transcript, frames, terms, visuals)
         write_json(analysis_dir / "timeline.json", [asdict(row) for row in timeline])
         if summarize and authoring:
+            chapters_path = analysis_dir / "chapters.json"
+            existing_chapters = _chapters(read_json(chapters_path)) if chapters_path.exists() else []
+            save_chapters = lambda rows: write_json(chapters_path, [asdict(row) for row in rows])
             chapters = draft_chapters(
                 units, content_maps, outline, visuals, self.llm, self.services.llm.model,
+                existing_chapters=existing_chapters, checkpoint=save_chapters,
             )
-            write_json(analysis_dir / "chapters.json", [asdict(row) for row in chapters])
-            review = review_coverage(content_maps, chapters, self.llm, self.services.llm.model)
-            write_json(analysis_dir / "review.json", review)
-            report = synthesize(chapters, outline_payload, self.llm, self.services.llm.model)
-            report["source_language"] = transcript.language
-            write_json(analysis_dir / "summary.json", report)
+            save_chapters(chapters)
+            review_path = analysis_dir / "review.json"
+            review_progress_path = analysis_dir / "review-progress.json"
+            if not review_path.exists():
+                progress = read_json(review_progress_path) if review_progress_path.exists() else {"chapters": []}
+                save_reviews = lambda rows: write_json(review_progress_path, {"chapters": rows})
+                review = review_coverage(
+                    units, content_maps, chapters, self.llm, self.services.llm.model,
+                    existing_reviews=progress.get("chapters", []), checkpoint=save_reviews,
+                )
+                write_json(review_path, review)
+            summary_path = analysis_dir / "summary.json"
+            if not summary_path.exists():
+                report = synthesize(chapters, outline_payload, self.llm, self.services.llm.model)
+                report["source_language"] = transcript.language
+                write_json(summary_path, report)
         elif summarize:
             summary_path = analysis_dir / "summary.json"
             summary_mode_path = analysis_dir / "summary-mode.json"

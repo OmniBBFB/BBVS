@@ -14,7 +14,7 @@ from .errors import BBVSError, DependencyError
 from .io import read_json, write_json
 from .models import Frame
 from .pipeline import VideoPipeline
-from .report import ReportOptions, export_report
+from .report import REPORT_VERSION, ReportOptions, export_report
 from .settings import AppSettings, RetrySettings
 from .summarize import SUMMARY_PROMPT_VERSION
 from .authoring import AUTHORING_PROMPT_VERSION
@@ -123,7 +123,9 @@ class DownloadStage(PipelineStage):
         else:
             context.progress("[1/7] 下载视频、字幕和元数据")
             context.run_dir, context.video, _ = ingest.download_to_run(
-                context.source, context.settings.runs_dir
+                context.source, context.settings.runs_dir,
+                cookies_from_browser=context.settings.download.cookies_from_browser,
+                cookies_file=context.settings.download.cookies_file,
             )
         context.progress(f"      运行目录: {context.run_dir}")
 
@@ -263,7 +265,7 @@ class ReportStage(PipelineStage):
             return
         context.progress("[7/7] 导出报告")
         analysis_dir = context.require("analysis_dir")
-        config = {"analysis": analysis_dir.name, **asdict(settings.report)}
+        config = {"analysis": analysis_dir.name, "renderer": REPORT_VERSION, **asdict(settings.report)}
         report_dir = context.require("run_dir") / "reports" / variant(analysis_dir.name, config)
         report_path = report_dir / settings.report.filename
         if report_path.exists():

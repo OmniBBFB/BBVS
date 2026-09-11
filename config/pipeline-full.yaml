@@ -1,6 +1,10 @@
 # BBVS 全功能流水线：启用 LLM、VLM、Embedding 和 Reranker。
 runs_dir: runs
 
+download:
+  cookies_from_browser: null
+  cookies_file: null
+
 retry:
   attempts: 3
   initial_delay: 2
