@@ -58,13 +58,14 @@ BBVS 是一个模块化视频理解工作台。它将视频下载、媒体处理
 ### 3.1 Authoring 验收要求
 
 - 每个原子证据单元必须在全局大纲中恰好出现一次，章节范围有序、连续且不重叠。
-- Content Map 必须分别保留论点、机制、例子、限制、公式/代码信号、视觉需求和不确定项。
+- Content Map 必须将原子 Knowledge Item 的机器控制分类与读者解释标签分开：程序只依赖固定英文枚举，中文 `content_label` 由模型生成且不得控制程序分支。
+- Global Outline 必须以 essential/main Knowledge Item 为主线；optional 或 chatter 不得成为 required item。
 - 章节正文必须使用对应范围的原始 speech/OCR/visual evidence，不能只使用上一轮短摘要。
 - 章节划分不得由固定 300 秒或固定数量 Timeline 直接决定。
 - 最终综合不得设置与视频长度无关的 500 汉字硬上限。
 - 每个 required visual request 必须产生候选，或记录明确的未召回原因。
 - 视觉候选和最终报告默认不得设置 24 帧、12 图等视频级硬上限。
-- 必须生成独立 review 产物，至少覆盖遗漏、失真、无证据论断和连贯性。
+- 必须生成独立 review 产物，至少覆盖 essential 内容遗漏、推理链断裂、失真、无证据论断和连贯性；不得将 optional 或 chatter 的省略报告为缺陷。
 
 ## 4. 系统结构
 
@@ -156,8 +157,9 @@ runs/<id>-<title>/
 │       ├── verified-transcript.json
 │       ├── visual-analysis.json
 │       ├── timeline.json
-│       ├── chapters.json
-│       └── summary.json
+│       ├── chapters-manifest.json
+│       ├── chapters/*.md
+│       └── report.md
 └── reports/
     └── <analysis-report-variant>/*.html|*.pdf
 ```
@@ -229,35 +231,54 @@ runs/<id>-<title>/
 
 默认窗口为 60 秒。片段按时间升序且不得重叠，最后一个片段可以短于 60 秒。
 
-### 6.5 Chapter
+### 6.5 Content Map
+
+Content Map 每个 Evidence Unit 对应一项，并包含原子 Knowledge Item：
 
 ```json
 {
-  "title": "Original title",
-  "title_zh": "中文标题",
-  "start": 0.0,
-  "end": 300.0,
-  "summary": "Original-language summary.",
-  "summary_zh": "中文摘要。",
-  "key_points": ["Original point"],
-  "key_points_zh": ["中文要点"]
+  "unit_id": "u_0001",
+  "teaching_goal": "解释连续性",
+  "knowledge_items": [
+    {
+      "id": "u_0001_k_001",
+      "content": "连续函数的复合仍然连续",
+      "control": {
+        "form": "proposition",
+        "role": "main",
+        "importance": "essential"
+      },
+      "content_label": "定理",
+      "relations": []
+    }
+  ],
+  "formulas_or_code": [],
+  "visual_requests": [],
+  "uncertainties": []
 }
 ```
 
-非中文来源的 `key_points` 与 `key_points_zh` 必须按索引一一对应。中文来源只填写原文字段，所有 `_zh` 字段保持空值。
+控制字段只能使用以下英文枚举：
 
-### 6.6 Summary
+- `form`: `definition|proposition|reasoning|procedure|instance|context`
+- `role`: `main|supporting|anecdote|chatter`
+- `importance`: `essential|useful|optional`
+- relation `type`: `defines|depends_on|supports|derives_from|explains|instantiates|refutes|qualifies|applies_to`
 
-非中文来源的 `summary.json` 包含：
+`content_label` 必须是简短中文内容标签，可使用“定理”“反例”“设计原则”等领域自然词汇；程序不得依据其值做筛选、校验或排版分支。
 
-- `summary` 与 `summary_zh`
-- `key_concepts` 与 `key_concepts_zh`
-- `takeaways` 与 `takeaways_zh`
-- `chapters`（模型生成的报告级章节引用，可为空）
+### 6.6 Chapter
 
-成对数组必须保持相同顺序和语义对应。
+章节正文由模型直接返回 Markdown，写入 `chapters/NNN.md`，不得要求模型将长正文编码进 JSON。
+中文来源只写中文；非中文来源应在同一 Markdown 中使用清晰小节保留原语言及中文翻译。
 
-中文来源只包含 `summary`、`key_concepts`、`takeaways`，不得生成重复的 `_zh` 字段。所有报告还必须记录 `source_language` 和 `translation_mode`；后者为 `monolingual` 或 `bilingual_zh`。
+`chapters-manifest.json` 由程序生成，只记录 `file`、`title`、`start`、`end`。模型生成的标题缺失时，程序允许使用确定性的章节编号作为回退。
+
+### 6.7 Summary
+
+最终综合由模型直接返回 Markdown，写入 `report.md`，不得要求模型将长正文编码进 JSON。
+中文来源包含总结、关键概念与核心结论；非中文来源还必须提供语义对齐的中文小节。
+`summary-mode.json` 由程序记录 `source_language` 和 `translation_mode`，后者为 `monolingual` 或 `bilingual_zh`。
 
 ## 7. 处理阶段
 
@@ -342,16 +363,18 @@ ASR 应请求 word timestamps。`faster-whisper` 支持独立 hotwords；`openai
 - 必须依次生成 Evidence Units、Content Map、Global Outline、章节正文、Coverage Review 和最终综合。
 - Evidence Unit 可以使用目标时长帮助控制模型上下文，但不得被直接视为章节。
 - Global Outline 必须按语义与概念依赖划分章节，不得默认每 5 个一分钟窗口形成一章。
+- Evidence Unit 必须继续完整覆盖时间范围，但章节的 `required_items` 只引用必须写入的 Knowledge Item；时间覆盖不得被解释为内容全量保留。
 - 章节写作必须重新读取其范围内的原始 speech、OCR、视觉证据和 Content Map。
+- 章节必须以“核心知识”为主，按需加入“解释与例子”和“补充内容”；optional 与 chatter 默认省略。
 - ASR `Transcript.language` 是语言模式的权威来源。
 - 中文（`zh`、`cmn`、`yue`）来源只生成中文原文字段，不生成 `_zh` 翻译字段。
 - 非中文来源保留视频主要语言，并在 `_zh` 字段提供中文翻译。
 - 中文关键概念必须以自然中文为主；必要外文专名可在括号中保留，不得整套概念改写为英文。
 - 章节不得引入输入证据之外的事实。
-- 每完成一个章节必须立即 checkpoint 到 `chapters.json`。
-- 重启时必须先比较 `summary-mode.json`。模式一致且章节字段符合该模式时，才可从已有章节数量对应的时间偏移继续。
+- 每完成一个章节必须立即 checkpoint 到 `chapters/NNN.md` 和程序生成的 `chapters-manifest.json`。
+- 重启时必须先比较 `summary-mode.json`。模式一致时，才可从 manifest 中连续存在的章节数量对应的时间偏移继续。
 - 总摘要基于章节压缩结果生成，而不是重新输入完整逐字稿。
-- 结构化提取与总结使用 `enable_thinking=false`，避免隐藏推理耗尽输出预算。
+- 结构化提取与 Markdown 写作均使用 `enable_thinking=false`，避免隐藏推理耗尽输出预算。
 
 ### 7.10 检索与问答
 
@@ -386,7 +409,7 @@ BBVS_<NAME>_TIMEOUT
 
 `<NAME>` 为 `LLM`、`VLM`、`EMBEDDING` 或 `RERANKER`。
 
-模型输出需要 JSON 时必须请求 `response_format={"type":"json_object"}`。客户端允许清理 Markdown code fence，但无效或截断 JSON 必须报错，不得静默猜测。
+结构化模型输出必须请求 `response_format={"type":"json_object"}`。客户端允许清理 Markdown code fence，但无效或截断 JSON 必须报错，不得静默猜测。章节正文和最终综合必须请求纯 Markdown，不得设置 JSON `response_format`。
 
 ## 9. 缓存与恢复
 
@@ -397,8 +420,8 @@ BBVS_<NAME>_TIMEOUT
 | `terminology.json` | 直接加载 |
 | `verified-transcript.json` | 使用校验结果，不重复调用 LLM |
 | `visual-analysis.json` | 直接加载；仅补齐缺失中文翻译 |
-| `chapters.json` | 语言模式一致时复用已有章节并继续 |
-| `summary.json` | 不重复生成总结 |
+| `chapters-manifest.json` + `chapters/*.md` | 语言模式一致且文件连续存在时复用已有章节并继续 |
+| `report.md` | 不重复生成总结 |
 
 任何缓存文件存在但 JSON 无效时应直接失败并暴露问题，不应自动忽略损坏产物。
 
@@ -439,7 +462,9 @@ BBVS_<NAME>_TIMEOUT
 ## 11. CLI 规格
 
 ```text
-bbvs run URL_OR_RUN_DIR [--config config/pipeline-basic.yaml]
+bbvs run BVID [--config config/pipeline-basic.yaml]
+bbvs run BVID_LIST.txt [--config config/pipeline-basic.yaml]
+bbvs serve [--config FILE] [--runs-dir DIR] [--host 127.0.0.1] [--port 8765]
 bbvs download URL [--runs-dir runs | --output-dir DIR]
 bbvs rename-run RUN_DIR
 bbvs probe VIDEO [--output FILE]
@@ -455,9 +480,17 @@ bbvs ask TIMELINE QUESTION [--services FILE] [--top-k N]
 bbvs export-report RUN_DIR --output FILE [--include-transcript] [--max-images N]
 ```
 
-`bbvs run` 是默认产品入口，负责下载、非 LLM 模型、LLM 分析和报告导出。传入已有运行目录时，按产物存在性跳过下载、音频、关键帧、OCR 和 ASR；分步命令用于实验与诊断。
+`bbvs run` 是默认产品入口，负责下载、非 LLM 模型、LLM 分析和报告导出。单任务只接受 BV 号，
+不得要求用户传 URL 或已有运行目录。runner 必须用 BV 号在 `runs_dir` 中定位唯一运行目录；找到时按产物
+存在性续跑，未找到时内部构造 Bilibili 视频 URL 并下载。同一 BV 号匹配多个目录时必须报错，不得任选。
+TXT 批量清单每个有效行也只接受 BV 号。分步命令用于实验与诊断。
 
 默认 `download URL` 自动创建归档目录。`--output-dir` 是兼容旧脚本的低级模式，只直接写入指定 source 目录。
+
+`bbvs serve` 提供结果浏览与任务启动 Web 界面，默认只监听 `127.0.0.1`。它必须支持按 BV 号、标题、
+作者、标签和 description 查询，展示分析/报告链接和分页关键帧；文件读取必须限制在选中的运行目录内。
+任务表单接受 BV 号或标准 Bilibili 视频 URL，内部归一化成 BV 号后调用与 CLI 相同的 runner。任务必须在
+后台运行，并通过状态接口显示阶段进度、重试、完成结果或错误；同一 BV 号不得同时启动重复任务。
 
 ## 12. 依赖
 
@@ -482,7 +515,7 @@ bbvs export-report RUN_DIR --output FILE [--include-transcript] [--max-images N]
 - 目录归档不得覆盖已有目标。
 - `rename-run` 必须更新所有 JSON 字符串中的旧绝对路径。
 - 下载失败的 pending 目录不得自动删除。
-- 报告生成不得调用 LLM/VLM；它只读取现有结构化产物。
+- 报告生成不得调用 LLM/VLM；它只读取现有 JSON/Markdown 产物。
 - HTML 中所有 metadata、模型文本和 OCR 文本必须转义。
 
 ## 14. 验收标准
@@ -491,7 +524,7 @@ bbvs export-report RUN_DIR --output FILE [--include-transcript] [--max-images N]
 
 - `pytest` 全部通过。
 - ASR/OCR adapter 可通过 fake 或标准化数据测试，而无需加载实际模型。
-- LLM/VLM 测试必须覆盖结构化 JSON 解析、截断/无效输出错误。
+- LLM/VLM 测试必须覆盖结构化 JSON 解析、截断/无效输出错误，以及长正文请求不设置 JSON response format。
 - 归档测试必须覆盖非法字符、路径重写和禁止覆盖。
 - 报告测试必须覆盖 HTML escaping、中文单语/非中文双语字段和图片—时间戳—总结配对。
 

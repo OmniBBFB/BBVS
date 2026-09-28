@@ -14,39 +14,41 @@
 
 默认配置使用 `config/pipeline-basic.yaml`。它会依次完成下载、音频、关键帧、OCR、ASR、LLM 分析和 PDF：
 
-首次使用先复制 DeepSeek 模板；`config/pipeline-basic.yaml` 已被 Git 忽略，可以保存本地 API Key：
+默认使用 DeepSeek。首次使用先复制配置模板；`config/pipeline-basic.yaml` 已被 Git 忽略，可以保存本地 API Key：
 
 ```bash
 cp config/pipeline-deepseek.example.yaml config/pipeline-basic.yaml
 ```
 
 ```bash
-uv run bbvs run 'VIDEO_URL'
+uv run bbvs run BV1E1xxebEDs
 ```
 
 指定其他 YAML：
 
 ```bash
-uv run bbvs run 'VIDEO_URL' --config config/pipeline-basic.yaml
+uv run bbvs run BV1E1xxebEDs --config config/pipeline-basic.yaml
 ```
 
-任务中断后，传入已经创建的运行目录即可按现有产物续跑：
+任务中断后仍然传入同一个 BV 号。BBVS 会自动定位 `runs/` 下的运行目录并按现有产物续跑：
 
 ```bash
-uv run bbvs run 'runs/<视频ID>-<标题>' --config config/pipeline-basic.yaml
+uv run bbvs run BV1E1xxebEDs --config config/pipeline-basic.yaml
 ```
 
-批量总结时仍使用同一个 `run` 命令。TXT 清单每行填写一个 BV 号，也支持完整的
-Bilibili 视频 URL、空行和以 `#` 开头的注释：
+批量总结时仍使用同一个 `run` 命令。TXT 清单每行只填写一个 BV 号，也允许空行和以 `#` 开头的注释：
 
 ```bash
 uv run bbvs run collections/3278335-bvids.txt \
-  --config config/pipeline-deepseek.yaml
+  --config config/pipeline-basic.yaml
 ```
 
 视频会按清单顺序逐个处理；单个视频失败不会阻塞后续任务。进度持续写入
 `runs/batches/3278335-bvids.json`。重新执行同一命令时，已存在的阶段产物会自动复用，
 失败或未完成的视频从断点继续。批次中存在失败项时，全部条目处理完毕后命令返回非零状态。
+
+`run` 是面向日常使用的唯一入口格式：单任务始终传 BV 号，不接受 URL 或运行目录名。
+目录标题发生变化不会影响续跑；如果同一 BV 号意外匹配到多个运行目录，命令会停止并明确报错。
 
 流水线按步骤保存实验产物：`audio/`、`keyframes/<variant>/`、`ocr/<variant>/`、
 `asr/<variant>/`、`analysis/<variant>/` 和 `reports/<variant>/`。同一配置再次运行会复用；
@@ -55,6 +57,20 @@ uv run bbvs run collections/3278335-bvids.txt \
 七个步骤均由独立阶段对象执行，并共享一个阶段上下文。每个阶段默认最多尝试 3 次，
 失败后等待 2 秒、4 秒再试；确定性的配置错误、缺少输入和依赖缺失会立即失败。
 远程分析重试会重新创建模型客户端，并从已写入的 checkpoint 继续。可在 YAML 中调整：
+
+## 查看已有结果
+
+启动 Web 界面（总结任务使用同一份 pipeline 配置）：
+
+```bash
+uv run bbvs serve --config config/pipeline-basic.yaml
+```
+
+浏览器打开 `http://127.0.0.1:8765`。首页可以按 BV 号、标题、作者、标签和 yt-dlp 描述搜索；
+详情页可以查看各分析版本、Markdown/HTML/PDF 报告和分页关键帧画廊。首页还可以输入 BV 号或
+Bilibili 视频 URL，在后台启动与 `bbvs run BV号` 相同的总结任务；进度页会实时显示流水线阶段、重试和错误。
+`--runs-dir` 可以覆盖配置文件中的目录。服务默认只监听本机；需要从局域网访问时可显式设置
+`--host 0.0.0.0`，并用 `--port` 修改端口。界面没有账户鉴权，不应直接暴露到公网。
 
 ```yaml
 retry:
@@ -166,7 +182,8 @@ ASR 和 OCR 的调用方只依赖各自的小型 interface。内置 adapter：
 
 ## 远程模型与完整分析
 
-基础流水线配置默认位于 `config/pipeline-basic.yaml`；全能力配置为 `config/pipeline-full.yaml`。也可用环境变量覆盖，例如
+DeepSeek 基础流水线配置默认位于 `config/pipeline-basic.yaml`；原本地 vLLM 配置现位于
+`config/pipeline-local.yaml`；全能力配置为 `config/pipeline-full.yaml`。也可用环境变量覆盖，例如
 `BBVS_LLM_BASE_URL`、`BBVS_LLM_MODEL` 和 `BBVS_LLM_API_KEY`。
 
 `services.llm.provider` 支持 `openai`（OpenAI-compatible/vLLM）和 `deepseek`。DeepSeek adapter 会把流水线中的思考开关转换为 DeepSeek 的 `thinking` 参数；模板见 `config/pipeline-deepseek.example.yaml`。
@@ -194,7 +211,9 @@ uv run bbvs analyze 'runs/BVxxxx-视频标题' \
 `--transcript .../transcript.json --ocr-input .../frames.json` 明确选择输入；一行 `run`
 命令会根据配置自动选择对应 variant。
 
-各阶段会写入 `run_dir/analysis/`，已有术语文件会复用，从而支持断点恢复。
+各阶段会写入 `run_dir/analysis/`，已有术语文件会复用，从而支持断点恢复。Authoring 会先把内容拆成
+Knowledge Item：固定英文枚举负责筛选与校验，模型生成的中文标签负责面向读者解释。章节正文优先展示
+“核心知识”，只保留有助理解的解释与例子，并默认省略 optional 内容和闲聊。
 
 ### 基础模式（不使用 VLM、Embedding、Reranker）
 
@@ -258,4 +277,4 @@ uv run bbvs export-report 'runs/BVxxxx-视频标题' \
   --output 'runs/BVxxxx-视频标题/report.pdf'
 ```
 
-增加 `--include-transcript` 可附带完整转录。报告只读取已有结构化产物，不会自动调用 LLM/VLM；缺失阶段会在报告中明确标注。
+增加 `--include-transcript` 可附带完整转录。报告只读取已有 JSON/Markdown 产物，不会自动调用 LLM/VLM；缺失阶段会在报告中明确标注。

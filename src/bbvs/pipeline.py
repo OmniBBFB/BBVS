@@ -5,10 +5,11 @@ from pathlib import Path
 
 from .config import Services
 from .artifacts import find_inputs
-from .io import read_json, write_json
+from .io import read_json, write_json, write_text
 from .llm import EmbeddingClient, RerankerClient, create_chat_client
+from .markdown_artifacts import load_markdown_chapters, write_markdown_chapters
 from .models import (
-    Chapter, ContentMap, Correction, EvidenceUnit, Frame, OutlineChapter, Term,
+    ContentMap, Correction, EvidenceUnit, Frame, OutlineChapter, Term,
     TimelineSegment, Transcript, VisualAnalysis,
 )
 from .summarize import summarize_timeline
@@ -18,7 +19,8 @@ from .transcript import from_dict
 from .verification import verify_transcript
 from .vision import analyze_frames, select_visual_frames, translate_visual_summaries
 from .authoring import (
-    build_evidence_units, draft_chapters, map_content, plan_outline, review_coverage,
+    AUTHORING_PROMPT_VERSION,
+    build_evidence_units, content_map_from_dict, draft_chapters, map_content, plan_outline, review_coverage,
     select_requested_frames, synthesize,
 )
 from .settings import AuthoringSettings
@@ -30,10 +32,6 @@ def _terms(payload: list[dict]) -> list[Term]:
 
 def _timeline(payload: list[dict]) -> list[TimelineSegment]:
     return [TimelineSegment(**{**item, "visuals": [VisualAnalysis(**row) for row in item.get("visuals", [])]}) for item in payload]
-
-
-def _chapters(payload: list[dict]) -> list[Chapter]:
-    return [Chapter(**row) for row in payload]
 
 
 class VideoPipeline:
@@ -62,8 +60,11 @@ class VideoPipeline:
         analysis_dir = analysis_dir or run_dir / "analysis"
         analysis_dir.mkdir(parents=True, exist_ok=True)
         status_path = analysis_dir / "status.json"
-        if status_path.exists() and read_json(status_path).get("complete") is True:
-            return analysis_dir
+        if status_path.exists():
+            status = read_json(status_path)
+            authoring_current = status.get("authoring_prompt_version") == AUTHORING_PROMPT_VERSION
+            if status.get("complete") is True and (not (authoring and summarize) or authoring_current):
+                return analysis_dir
         metadata = read_json(run_dir / "source" / "metadata.json")
         transcript_candidates = [transcript_path] if transcript_path else find_inputs(run_dir, "asr", "transcript.json", "asr-*.json")
         ocr_candidates = [frames_path] if frames_path else find_inputs(run_dir, "ocr", "frames.json", "ocr-*.json")
@@ -108,10 +109,16 @@ class VideoPipeline:
         content_maps = []
         outline_payload: dict = {}
         outline = []
+        authoring_cache_current = False
         if authoring and summarize:
             units_path = analysis_dir / "evidence-units.json"
             maps_path = analysis_dir / "content-map.json"
             outline_path = analysis_dir / "outline.json"
+            authoring_version_path = analysis_dir / "authoring-version.json"
+            authoring_cache_current = (
+                authoring_version_path.exists()
+                and read_json(authoring_version_path).get("prompt_version") == AUTHORING_PROMPT_VERSION
+            )
             units = (
                 [EvidenceUnit(**row) for row in read_json(units_path)] if units_path.exists()
                 else build_evidence_units(
@@ -119,19 +126,26 @@ class VideoPipeline:
                 )
             )
             write_json(units_path, [asdict(row) for row in units])
-            existing_maps = [ContentMap(**row) for row in read_json(maps_path)] if maps_path.exists() else []
-            save_maps = lambda rows: write_json(maps_path, [asdict(row) for row in rows])
+            existing_maps = (
+                [content_map_from_dict(row) for row in read_json(maps_path)]
+                if authoring_cache_current and maps_path.exists() else []
+            )
+
+            def save_maps(rows: list[ContentMap]) -> None:
+                write_json(maps_path, [asdict(row) for row in rows])
+                write_json(authoring_version_path, {"prompt_version": AUTHORING_PROMPT_VERSION})
+
             content_maps = map_content(
                 units, self.llm, self.services.llm.model, authoring_settings.max_units_per_map,
                 existing_maps=existing_maps, checkpoint=save_maps,
             )
             save_maps(content_maps)
-            if outline_path.exists():
+            if authoring_cache_current and outline_path.exists():
                 outline_payload = read_json(outline_path)
                 outline = [OutlineChapter(
                     title=str(row.get("title", "")), start_unit=str(row.get("start_unit", "")),
                     end_unit=str(row.get("end_unit", "")), teaching_goal=str(row.get("teaching_goal", "")),
-                    required_units=[str(value) for value in row.get("required_units", [])],
+                    required_items=[str(value) for value in row.get("required_items", [])],
                     visual_requests=[value for value in row.get("visual_requests", []) if isinstance(value, dict)],
                 ) for row in outline_payload.get("chapters", [])]
             else:
@@ -163,9 +177,8 @@ class VideoPipeline:
         timeline = build_timeline(transcript, frames, terms, visuals)
         write_json(analysis_dir / "timeline.json", [asdict(row) for row in timeline])
         if summarize and authoring:
-            chapters_path = analysis_dir / "chapters.json"
-            existing_chapters = _chapters(read_json(chapters_path)) if chapters_path.exists() else []
-            save_chapters = lambda rows: write_json(chapters_path, [asdict(row) for row in rows])
+            existing_chapters = load_markdown_chapters(analysis_dir) if authoring_cache_current else []
+            save_chapters = lambda rows: write_markdown_chapters(analysis_dir, rows)
             chapters = draft_chapters(
                 units, content_maps, outline, visuals, self.llm, self.services.llm.model,
                 existing_chapters=existing_chapters, checkpoint=save_chapters,
@@ -173,41 +186,38 @@ class VideoPipeline:
             save_chapters(chapters)
             review_path = analysis_dir / "review.json"
             review_progress_path = analysis_dir / "review-progress.json"
-            if not review_path.exists():
-                progress = read_json(review_progress_path) if review_progress_path.exists() else {"chapters": []}
+            if not authoring_cache_current or not review_path.exists():
+                progress = (
+                    read_json(review_progress_path)
+                    if authoring_cache_current and review_progress_path.exists() else {"chapters": []}
+                )
                 save_reviews = lambda rows: write_json(review_progress_path, {"chapters": rows})
                 review = review_coverage(
                     units, content_maps, chapters, self.llm, self.services.llm.model,
                     existing_reviews=progress.get("chapters", []), checkpoint=save_reviews,
                 )
                 write_json(review_path, review)
-            summary_path = analysis_dir / "summary.json"
-            if not summary_path.exists():
+            summary_path = analysis_dir / "report.md"
+            if not authoring_cache_current or not summary_path.exists():
                 report = synthesize(chapters, outline_payload, self.llm, self.services.llm.model)
-                report["source_language"] = transcript.language
-                write_json(summary_path, report)
+                write_text(summary_path, report + "\n")
         elif summarize:
-            summary_path = analysis_dir / "summary.json"
+            summary_path = analysis_dir / "report.md"
             summary_mode_path = analysis_dir / "summary-mode.json"
             chinese_source = (transcript.language or "").casefold().startswith(("zh", "cmn", "yue"))
             expected_mode = {
                 "source_language": transcript.language,
                 "translation_mode": "monolingual" if chinese_source else "bilingual_zh",
             }
-            cached_summary = read_json(summary_path) if summary_path.exists() else {}
-            summary_current = all(cached_summary.get(key) == value for key, value in expected_mode.items())
+            summary_current = (
+                summary_path.exists() and summary_mode_path.exists()
+                and read_json(summary_mode_path) == expected_mode
+            )
             if not summary_current:
-                chapters_path = analysis_dir / "chapters.json"
                 saved_mode = read_json(summary_mode_path) if summary_mode_path.exists() else {}
                 mode_current = saved_mode == expected_mode
-                existing = _chapters(read_json(chapters_path)) if chapters_path.exists() and mode_current else []
-                valid_existing = (
-                    all(not row.summary_zh and not row.title_zh and not row.key_points_zh for row in existing)
-                    if chinese_source else all(row.summary_zh for row in existing)
-                )
-                if existing and not valid_existing:
-                    existing = []
-                save_chapters = lambda rows: write_json(chapters_path, [asdict(row) for row in rows])
+                existing = load_markdown_chapters(analysis_dir) if mode_current else []
+                save_chapters = lambda rows: write_markdown_chapters(analysis_dir, rows)
                 write_json(summary_mode_path, expected_mode)
                 chapters, report = summarize_timeline(
                     timeline, self.llm, self.services.llm.model,
@@ -215,6 +225,9 @@ class VideoPipeline:
                     source_language=transcript.language,
                 )
                 save_chapters(chapters)
-                write_json(summary_path, report)
-        write_json(status_path, {"complete": True})
+                write_text(summary_path, report + "\n")
+        status = {"complete": True}
+        if authoring and summarize:
+            status["authoring_prompt_version"] = AUTHORING_PROMPT_VERSION
+        write_json(status_path, status)
         return analysis_dir

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -9,6 +10,13 @@ from typing import Any, Protocol
 from .errors import BBVSError
 
 Message = dict[str, Any]
+
+_CONTEXT_LIMIT_RE = re.compile(
+    r"maximum context length is (?P<context>\d+) tokens.*?"
+    r"prompt contains at least (?P<input>\d+) input tokens",
+    re.IGNORECASE | re.DOTALL,
+)
+_CONTEXT_TOKEN_HEADROOM = 256
 
 
 class ChatModel(Protocol):
@@ -69,9 +77,26 @@ class OpenAICompatibleClient:
         if response_format is not None:
             payload["response_format"] = response_format
         payload.update(self._provider_body(extra_body))
-        result = _request_json(
-            self.base_url.rstrip("/") + "/chat/completions", payload, self.api_key, self.timeout
-        )
+        url = self.base_url.rstrip("/") + "/chat/completions"
+        try:
+            result = _request_json(url, payload, self.api_key, self.timeout)
+        except BBVSError as exc:
+            # OpenAI-compatible servers reject requests when input + requested
+            # output exceeds the model window. Use the server's own token count
+            # to preserve as much output as possible instead of retrying the
+            # identical request at the pipeline level.
+            match = _CONTEXT_LIMIT_RE.search(str(exc))
+            if match is None:
+                raise
+            available = (
+                int(match.group("context"))
+                - int(match.group("input"))
+                - _CONTEXT_TOKEN_HEADROOM
+            )
+            if available < 1 or available >= max_tokens:
+                raise
+            payload = {**payload, "max_tokens": available}
+            result = _request_json(url, payload, self.api_key, self.timeout)
         try:
             return result["choices"][0]["message"]["content"].strip()
         except (KeyError, IndexError, TypeError, AttributeError) as exc:

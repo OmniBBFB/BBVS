@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -90,15 +91,68 @@ class EvidenceUnit:
     source_chapter: str | None = None
 
 
+class KnowledgeForm(StrEnum):
+    DEFINITION = "definition"
+    PROPOSITION = "proposition"
+    REASONING = "reasoning"
+    PROCEDURE = "procedure"
+    INSTANCE = "instance"
+    CONTEXT = "context"
+
+
+class KnowledgeRole(StrEnum):
+    MAIN = "main"
+    SUPPORTING = "supporting"
+    ANECDOTE = "anecdote"
+    CHATTER = "chatter"
+
+
+class KnowledgeImportance(StrEnum):
+    ESSENTIAL = "essential"
+    USEFUL = "useful"
+    OPTIONAL = "optional"
+
+
+class KnowledgeRelationType(StrEnum):
+    DEFINES = "defines"
+    DEPENDS_ON = "depends_on"
+    SUPPORTS = "supports"
+    DERIVES_FROM = "derives_from"
+    EXPLAINS = "explains"
+    INSTANTIATES = "instantiates"
+    REFUTES = "refutes"
+    QUALIFIES = "qualifies"
+    APPLIES_TO = "applies_to"
+
+
+@dataclass(slots=True)
+class KnowledgeControl:
+    form: KnowledgeForm
+    role: KnowledgeRole
+    importance: KnowledgeImportance
+
+
+@dataclass(slots=True)
+class KnowledgeRelation:
+    type: KnowledgeRelationType
+    target: str
+
+
+@dataclass(slots=True)
+class KnowledgeItem:
+    id: str
+    content: str
+    control: KnowledgeControl
+    content_label: str = ""
+    relations: list[KnowledgeRelation] = field(default_factory=list)
+
+
 @dataclass(slots=True)
 class ContentMap:
     unit_id: str
     teaching_goal: str = ""
-    claims: list[str] = field(default_factory=list)
-    mechanisms: list[str] = field(default_factory=list)
-    examples: list[str] = field(default_factory=list)
+    knowledge_items: list[KnowledgeItem] = field(default_factory=list)
     formulas_or_code: list[str] = field(default_factory=list)
-    limitations: list[str] = field(default_factory=list)
     visual_requests: list[dict[str, Any]] = field(default_factory=list)
     uncertainties: list[str] = field(default_factory=list)
 
@@ -109,7 +163,7 @@ class OutlineChapter:
     start_unit: str
     end_unit: str
     teaching_goal: str = ""
-    required_units: list[str] = field(default_factory=list)
+    required_items: list[str] = field(default_factory=list)
     visual_requests: list[dict[str, Any]] = field(default_factory=list)
 
 

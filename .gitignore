@@ -9,4 +9,5 @@ runs/
 models/
 config/pipeline-basic.yaml
 config/pipeline-deepseek.yaml
+config/pipeline-local.yaml
 collections/

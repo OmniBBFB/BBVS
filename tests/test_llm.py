@@ -2,6 +2,7 @@ import io
 import json
 from unittest.mock import patch
 
+from bbvs.errors import BBVSError
 from bbvs.llm import DeepSeekCompatibleClient, OpenAICompatibleClient
 
 
@@ -24,6 +25,26 @@ def test_openai_compatible_client_builds_v1_request() -> None:
     assert request.full_url == "http://localhost:8000/v1/chat/completions"
     assert json.loads(request.data)["model"] == "demo"
     assert json.loads(request.data)["max_tokens"] == 2048
+
+
+def test_client_reduces_output_budget_when_prompt_nearly_fills_context() -> None:
+    error = BBVSError(
+        "推理请求失败 HTTP 400: This model's maximum context length is 8192 tokens. "
+        "However, you requested 4096 output tokens and your prompt contains at least "
+        "4097 input tokens, for a total of at least 8193 tokens."
+    )
+    body = {"choices": [{"message": {"content": "completed"}}]}
+
+    with patch("bbvs.llm._request_json", side_effect=[error, body]) as request:
+        result = OpenAICompatibleClient("http://localhost:8000/v1").chat(
+            model="demo", messages=[{"role": "user", "content": "long prompt"}],
+            max_tokens=4096,
+        )
+
+    assert result == "completed"
+    assert request.call_count == 2
+    assert request.call_args_list[0].args[1]["max_tokens"] == 4096
+    assert request.call_args_list[1].args[1]["max_tokens"] == 3839
 
 
 def test_deepseek_client_translates_non_thinking_parameter() -> None:

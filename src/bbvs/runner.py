@@ -37,14 +37,24 @@ def _existing_video(run_dir: Path) -> Path:
     return video
 
 
-def _resolve_run_dir(source: str, runs_dir: Path) -> Path | None:
-    candidate = Path(source)
-    if candidate.is_dir():
-        return candidate.resolve()
-    configured_candidate = runs_dir / candidate
-    if configured_candidate.is_dir():
-        return configured_candidate.resolve()
-    return None
+def normalize_bvid(value: str) -> str:
+    bvid = value.strip()
+    if not _BVID.fullmatch(bvid):
+        raise ValueError(f"请输入有效的 Bilibili BV 号（例如 BV1E1xxebEDs）: {value}")
+    return bvid
+
+
+def resolve_run_dir(bvid: str, runs_dir: Path) -> Path | None:
+    """Resolve the only run directory for a BV id, hiding directory names from callers."""
+    bvid = normalize_bvid(bvid)
+    candidates = sorted(path for path in runs_dir.glob(f"{bvid}-*") if path.is_dir())
+    exact = runs_dir / bvid
+    if exact.is_dir():
+        candidates.insert(0, exact)
+    if len(candidates) > 1:
+        names = "、".join(path.name for path in candidates)
+        raise FileExistsError(f"{bvid} 匹配到多个运行目录，无法确定断点任务: {names}")
+    return candidates[0].resolve() if candidates else None
 
 
 @dataclass(slots=True)
@@ -115,7 +125,8 @@ class DownloadStage(PipelineStage):
     number, title = 1, "下载视频、字幕和元数据"
 
     def _run(self, context: StageContext) -> None:
-        existing = _resolve_run_dir(context.source, context.settings.runs_dir)
+        bvid = normalize_bvid(context.source)
+        existing = resolve_run_dir(bvid, context.settings.runs_dir)
         if existing:
             context.run_dir = existing
             context.video = _existing_video(existing)
@@ -123,7 +134,7 @@ class DownloadStage(PipelineStage):
         else:
             context.progress("[1/7] 下载视频、字幕和元数据")
             context.run_dir, context.video, _ = ingest.download_to_run(
-                context.source, context.settings.runs_dir,
+                f"https://www.bilibili.com/video/{bvid}", context.settings.runs_dir,
                 cookies_from_browser=context.settings.download.cookies_from_browser,
                 cookies_file=context.settings.download.cookies_file,
             )
@@ -306,43 +317,29 @@ def default_stages(retry: RetrySettings, sleeper: Sleeper = sleep) -> tuple[Pipe
 
 
 def run_pipeline(
-    source: str, settings: AppSettings, progress: Progress = print, *, sleeper: Sleeper = sleep,
+    bvid: str, settings: AppSettings, progress: Progress = print, *, sleeper: Sleeper = sleep,
 ) -> Path:
-    context = StageContext(source=source, settings=settings, progress=progress)
+    context = StageContext(source=normalize_bvid(bvid), settings=settings, progress=progress)
     return Pipeline(default_stages(settings.retry, sleeper)).run(context)
 
 
-def _manifest_sources(manifest: Path) -> list[tuple[str, str]]:
-    sources: list[tuple[str, str]] = []
+def _manifest_sources(manifest: Path) -> list[str]:
+    sources: list[str] = []
     seen: set[str] = set()
     for line_number, raw_line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
         value = raw_line.strip()
         if not value or value.startswith("#"):
             continue
-        match = _BVID.fullmatch(value)
-        if match:
-            bvid = match.group(0)
-        else:
-            match = re.fullmatch(
-                r"https?://(?:www\.)?bilibili\.com/video/(BV[0-9A-Za-z]{10})(?:[/?#].*)?",
-                value,
-            )
-            if not match:
-                raise ValueError(f"批量清单第 {line_number} 行不是有效 BV 号或 Bilibili 视频 URL: {value}")
-            bvid = match.group(1)
+        try:
+            bvid = normalize_bvid(value)
+        except ValueError as exc:
+            raise ValueError(f"批量清单第 {line_number} 行不是有效 BV 号: {value}") from exc
         if bvid not in seen:
             seen.add(bvid)
-            sources.append((bvid, f"https://www.bilibili.com/video/{bvid}"))
+            sources.append(bvid)
     if not sources:
         raise ValueError(f"批量清单为空: {manifest}")
     return sources
-
-
-def _batch_run_dir(runs_dir: Path, bvid: str) -> Path | None:
-    candidates = sorted(path for path in runs_dir.glob(f"{bvid}-*") if path.is_dir())
-    if len(candidates) > 1:
-        raise FileExistsError(f"{bvid} 匹配到多个运行目录，无法确定复用目标")
-    return candidates[0].resolve() if candidates else None
 
 
 def run_batch(
@@ -354,16 +351,15 @@ def run_batch(
     results: list[dict[str, str]] = []
     progress(f"批量任务：共 {len(sources)} 个视频")
 
-    for index, (bvid, url) in enumerate(sources, 1):
+    for index, bvid in enumerate(sources, 1):
         progress(f"\n===== [{index}/{len(sources)}] {bvid} =====")
         try:
-            existing = _batch_run_dir(settings.runs_dir, bvid)
-            run_dir = runner(str(existing) if existing else url, settings, progress=progress, sleeper=sleeper)
+            run_dir = runner(bvid, settings, progress=progress, sleeper=sleeper)
             results.append({"bvid": bvid, "status": "completed", "run_dir": str(run_dir)})
         except (BBVSError, ValueError, FileNotFoundError, FileExistsError) as exc:
             progress(f"      [{index}/{len(sources)}] 失败，继续下一个视频: {exc}")
             item = {"bvid": bvid, "status": "failed", "error": str(exc)}
-            existing = _batch_run_dir(settings.runs_dir, bvid)
+            existing = resolve_run_dir(bvid, settings.runs_dir)
             if existing:
                 item["run_dir"] = str(existing)
             results.append(item)
@@ -378,11 +374,11 @@ def run_batch(
 
 
 def run_source(
-    source: str, settings: AppSettings, progress: Progress = print, *, sleeper: Sleeper = sleep,
+    video_id: str, settings: AppSettings, progress: Progress = print, *, sleeper: Sleeper = sleep,
 ) -> Path:
-    candidate = Path(source)
+    candidate = Path(video_id)
     if candidate.suffix.casefold() == ".txt":
         if not candidate.is_file():
             raise FileNotFoundError(f"找不到批量清单: {candidate}")
         return run_batch(candidate, settings, progress, sleeper=sleeper)
-    return run_pipeline(source, settings, progress, sleeper=sleeper)
+    return run_pipeline(normalize_bvid(video_id), settings, progress, sleeper=sleeper)

@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from bbvs.io import write_json
+from bbvs.markdown_artifacts import write_markdown_chapters
+from bbvs.models import Chapter
 from bbvs.report import ReportOptions, build_html, export_report
 
 
@@ -101,3 +103,20 @@ def test_basic_report_does_not_warn_about_intentionally_disabled_vision(tmp_path
     assert "视觉分析" not in document
     assert "图文时间轴" not in document
     assert "stale unverified visual" not in document
+
+
+def test_report_prefers_markdown_artifacts_and_escapes_model_html(tmp_path: Path) -> None:
+    run = sample_run(tmp_path)
+    analysis = run / "analysis"
+    write_markdown_chapters(analysis, [
+        Chapter("新章节", 0, 60, "## 新章节\n\n正文里的 <script>alert(1)</script>\n\n- 要点"),
+    ])
+    (analysis / "report.md").write_text("# 新报告\n\n这是 Markdown 总结。\n", encoding="utf-8")
+    write_json(analysis / "summary.json", {"summary": "旧总结"})
+
+    document = build_html(run, ReportOptions(max_images=0))
+
+    assert "新报告" in document and "这是 Markdown 总结" in document
+    assert "新章节" in document and "<li>要点</li>" in document
+    assert "旧总结" not in document
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in document

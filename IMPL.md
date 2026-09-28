@@ -4,6 +4,9 @@
 
 ## 当前主链路
 
+默认 `run` interface 只接收 BV 号。`runner.resolve_run_dir` 在内部隐藏标题目录查找：唯一匹配时续跑，
+没有匹配时由 DownloadStage 构造 Bilibili URL；调用者不需要知道运行目录名。
+
 ```text
 yt-dlp
   ├─ 平台字幕解析（manual > automatic）
@@ -24,12 +27,19 @@ Transcript + OCR → EvidenceUnit → ContentMap → Global Outline
 `bbvs.authoring` 是写作主链路的深模块。它隐藏以下实现步骤：
 
 - `build_evidence_units`：产生稳定的原子证据封装；默认约 120 秒，但明确不代表章节。
-- `map_content`：高召回抽取教学目标、论点、机制、例子、限制、公式/代码和视觉需求。
-- `plan_outline`：按概念依赖规划全局章节，并验证所有 evidence unit 恰好覆盖一次。
+- `map_content`：抽取原子 Knowledge Item；`form/role/importance` 使用固定英文枚举，`content_label` 使用模型生成的中文领域词汇，同时保留公式/代码和视觉需求。
+- `plan_outline`：按概念依赖规划全局章节，以 essential/main item 为主线，并验证所有 evidence unit 恰好覆盖一次。
 - `select_requested_frames`：按视觉需求时间范围选择候选；每个需求的候选与保留数量均可配置，无视频级上限。
-- `draft_chapters`：重新组织教学逻辑，并直接读取原始证据而非上一轮短摘要。
-- `review_coverage`：独立报告遗漏、失真、无证据论断和连贯性问题。
-- `synthesize`：基于完整章节做全局综合，不设置 500 汉字硬上限。
+- `draft_chapters`：程序按控制枚举生成“核心知识 / 解释与例子 / 补充内容”写作清单，省略 optional/chatter，再读取原始证据完成纯 Markdown 章节。
+- `review_coverage`：独立报告 essential 遗漏、推理链断裂、失真、无证据论断和连贯性问题，不惩罚 optional/chatter 的省略。
+- `synthesize`：以核心知识和跨章联系为主生成纯 Markdown 全局综合，不逐章复述。
+
+长文本产物写入 `chapters/*.md` 和 `report.md`。`chapters-manifest.json` 仅由程序维护文件名、标题和时间范围，
+用于断点续跑；结构化抽取、outline 和 coverage review 仍使用 JSON。报告读取新 Markdown 产物，同时兼容旧的
+`chapters.json` 与 `summary.json`。
+
+`authoring-version.json` 和完成状态记录 `AUTHORING_PROMPT_VERSION`。版本改变时复用原始 Evidence Unit，重建
+Content Map 及其下游 authoring 产物；runner 的 analysis variant 同时包含该版本，因此默认流程不会混用旧契约。
 
 ## 字幕
 
@@ -53,6 +63,13 @@ PPT 进入候选与报告。后续可增加固定间隔补采样、感知哈希�
 
 `timeline.py` 的固定窗口、Embedding、Reranker 和 QA 暂时保留，作为可选 Retrieval View。
 Authoring module 不使用“每 5 个 Timeline 作为章节”的旧策略。
+
+## Results Web
+
+`bbvs.web.RunCatalog` 是读取 `runs/` 的深模块：调用者只使用 `all/search/get/asset` interface，目录扫描、
+新旧报告发现、元数据归一化和路径越界防护都隐藏在实现中。`JobManager` 隐藏 URL/BV 归一化、后台线程、
+同 BV 去重和进度快照，并通过已有 runner 写入正常运行产物。`bbvs serve` 使用标准库线程 HTTP server，
+提供服务端渲染的搜索、详情、报告、关键帧和任务进度页面，无前端构建步骤。
 
 ## 已知限制
 

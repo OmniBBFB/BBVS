@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 import html
-import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from .errors import DependencyError
 from .io import read_json
+from .markdown_artifacts import load_markdown_chapters
 
 REPORT_VERSION = "vlm-verified-visuals-v2"
 
@@ -46,6 +47,64 @@ def _time(seconds: float | int | None) -> str:
 
 def _text(value: Any) -> str:
     return html.escape(str(value or ""))
+
+
+def _markdown_html(markdown: str) -> str:
+    """Render the small Markdown subset requested from models, escaping all HTML."""
+    parts: list[str] = []
+    paragraph: list[str] = []
+    in_list = False
+    in_code = False
+    code: list[str] = []
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            parts.append(f'<p>{" ".join(paragraph)}</p>')
+            paragraph.clear()
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            parts.append("</ul>")
+            in_list = False
+
+    for raw_line in markdown.splitlines():
+        line = raw_line.rstrip()
+        if line.strip().startswith("```"):
+            flush_paragraph()
+            close_list()
+            if in_code:
+                parts.append(f'<pre><code>{html.escape(chr(10).join(code))}</code></pre>')
+                code.clear()
+            in_code = not in_code
+            continue
+        if in_code:
+            code.append(line)
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        item = re.match(r"^\s*[-*+]\s+(.+)$", line)
+        if heading:
+            flush_paragraph()
+            close_list()
+            level = min(4, len(heading.group(1)) + 1)
+            parts.append(f"<h{level}>{html.escape(heading.group(2))}</h{level}>")
+        elif item:
+            flush_paragraph()
+            if not in_list:
+                parts.append("<ul>")
+                in_list = True
+            parts.append(f"<li>{html.escape(item.group(1))}</li>")
+        elif not line.strip():
+            flush_paragraph()
+            close_list()
+        else:
+            close_list()
+            paragraph.append(html.escape(line.strip()))
+    if in_code:
+        parts.append(f'<pre><code>{html.escape(chr(10).join(code))}</code></pre>')
+    flush_paragraph()
+    close_list()
+    return "".join(parts)
 
 
 def _timestamp_link(url: str, seconds: float) -> str:
@@ -93,6 +152,11 @@ def _visual_timeline_cards(
 
 
 def _chapter_html(row: dict[str, Any], url: str) -> str:
+    if "markdown" in row:
+        return (
+            f'<section class="chapter"><div class="time">{_timestamp_link(url, row.get("start", 0))}–'
+            f'{_timestamp_link(url, row.get("end", 0))}</div>{_markdown_html(str(row["markdown"]))}</section>'
+        )
     title_zh = row.get("title_zh")
     summary_zh = row.get("summary_zh")
     points_zh = row.get("key_points_zh", [])
@@ -154,13 +218,20 @@ def build_html(
     source = run_dir / "source"
     analysis = analysis_dir or run_dir / "analysis"
     metadata = _load(source / "metadata.json", {})
+    report_markdown_path = analysis / "report.md"
     summary = _load(analysis / "summary.json", {})
-    chapters = _load(analysis / "chapters.json", [])
+    markdown_chapters = load_markdown_chapters(analysis)
+    chapters = (
+        [{"title": row.title, "start": row.start, "end": row.end, "markdown": row.summary}
+         for row in markdown_chapters]
+        if (analysis / "chapters-manifest.json").exists()
+        else _load(analysis / "chapters.json", [])
+    )
     terms = _load(analysis / "terminology.json", [])
     corrections = _load(analysis / "corrections.json", [])
     timeline = _load(analysis / "timeline.json", [])
     expected_stages = [
-        ("全局摘要", bool(summary)), ("章节摘要", bool(chapters)),
+        ("全局摘要", report_markdown_path.exists() or bool(summary)), ("章节摘要", bool(chapters)),
         ("转录校正", (analysis / "verified-transcript.json").exists()),
     ]
     if options.expect_vision:
@@ -172,7 +243,11 @@ def build_html(
     warning = f'<div class="warning">本报告基于已有产物生成；尚未运行：{_text("、".join(missing))}。</div>' if missing else ""
 
     summary_html = ""
-    if summary:
+    if report_markdown_path.exists():
+        summary_html = '<section class="markdown-report">' + _markdown_html(
+            report_markdown_path.read_text(encoding="utf-8")
+        ) + "</section>"
+    elif summary:
         summary_html = f'<h2>内容摘要</h2><p>{_text(summary.get("summary"))}</p>'
         if summary.get("summary_zh"):
             summary_html += f'<div class="translation"><div class="translation-label">中文翻译</div>{_text(summary.get("summary_zh"))}</div>'

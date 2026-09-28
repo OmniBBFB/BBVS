@@ -7,32 +7,45 @@ from bbvs.errors import BBVSError
 from bbvs.models import Frame, Transcript, TranscriptSegment
 from bbvs.io import read_json
 from bbvs.runner import (
-    AnalysisStage, PipelineStage, StageContext, _batch_run_dir, _manifest_sources, _resolve_run_dir,
-    run_batch, run_pipeline, run_source,
+    AnalysisStage, PipelineStage, StageContext, _manifest_sources, normalize_bvid,
+    resolve_run_dir, run_batch, run_pipeline, run_source,
 )
 from bbvs.settings import AppSettings, RetrySettings
 
 
-def test_resolve_run_dir_accepts_name_relative_to_configured_runs_dir(tmp_path: Path) -> None:
+def test_resolve_run_dir_finds_titled_directory_from_bvid(tmp_path: Path) -> None:
     runs_dir = tmp_path / "runs"
-    expected = runs_dir / "BV1-标题"
+    expected = runs_dir / "BV1E1xxebEDs-标题"
     expected.mkdir(parents=True)
 
-    assert _resolve_run_dir("BV1-标题", runs_dir) == expected.resolve()
+    assert resolve_run_dir("BV1E1xxebEDs", runs_dir) == expected.resolve()
 
 
-def test_manifest_parses_bvids_urls_comments_and_duplicates(tmp_path: Path) -> None:
+def test_manifest_parses_bvids_comments_and_duplicates(tmp_path: Path) -> None:
     manifest = tmp_path / "videos.txt"
     manifest.write_text(
-        "# season\nBV1E1xxebEDs\n\nhttps://www.bilibili.com/video/BV1Nh1BYKEEA?p=1\n"
+        "# season\nBV1E1xxebEDs\n\nBV1Nh1BYKEEA\n"
         "BV1E1xxebEDs\n",
         encoding="utf-8",
     )
 
-    assert _manifest_sources(manifest) == [
-        ("BV1E1xxebEDs", "https://www.bilibili.com/video/BV1E1xxebEDs"),
-        ("BV1Nh1BYKEEA", "https://www.bilibili.com/video/BV1Nh1BYKEEA"),
-    ]
+    assert _manifest_sources(manifest) == ["BV1E1xxebEDs", "BV1Nh1BYKEEA"]
+
+
+def test_single_run_rejects_url_and_directory_inputs(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="BV 号"):
+        normalize_bvid("https://www.bilibili.com/video/BV1E1xxebEDs")
+    with pytest.raises(ValueError, match="BV 号"):
+        normalize_bvid(str(tmp_path / "BV1E1xxebEDs-title"))
+
+
+def test_resolve_run_dir_rejects_ambiguous_bvid(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    (runs_dir / "BV1E1xxebEDs-旧标题").mkdir(parents=True)
+    (runs_dir / "BV1E1xxebEDs-新标题").mkdir()
+
+    with pytest.raises(FileExistsError, match="匹配到多个运行目录"):
+        resolve_run_dir("BV1E1xxebEDs", runs_dir)
 
 
 def test_batch_continues_after_video_failure_and_saves_progress(tmp_path: Path) -> None:
@@ -45,7 +58,7 @@ def test_batch_continues_after_video_failure_and_saves_progress(tmp_path: Path) 
 
     def fake_runner(source, settings, progress, sleeper):
         calls.append(source)
-        if source.endswith("BV1E1xxebEDs"):
+        if source == "BV1E1xxebEDs":
             raise BBVSError("model unavailable")
         return settings.runs_dir / "BV1Nh1BYKEEA-title"
 
@@ -73,8 +86,8 @@ def test_batch_reuses_run_directory_matching_bvid(tmp_path: Path) -> None:
 
     run_batch(manifest, settings, progress=lambda message: None, runner=fake_runner)
 
-    assert received == [str(existing.resolve())]
-    assert _batch_run_dir(settings.runs_dir, "BV1E1xxebEDs") == existing.resolve()
+    assert received == ["BV1E1xxebEDs"]
+    assert resolve_run_dir("BV1E1xxebEDs", settings.runs_dir) == existing.resolve()
 
 
 def test_run_source_treats_txt_as_batch_manifest(monkeypatch, tmp_path: Path) -> None:
@@ -93,11 +106,13 @@ def test_one_command_runner_executes_all_stages(monkeypatch, tmp_path: Path) -> 
     video.parent.mkdir(parents=True)
     video.write_bytes(b"video")
     events = []
+    downloads = []
 
-    monkeypatch.setattr(
-        "bbvs.runner.ingest.download_to_run",
-        lambda source, root, **options: (run_dir, video, {}),
-    )
+    def fake_download(source, root, **options):
+        downloads.append(source)
+        return run_dir, video, {}
+
+    monkeypatch.setattr("bbvs.runner.ingest.download_to_run", fake_download)
     monkeypatch.setattr("bbvs.runner.media.extract_audio", lambda source, output: output.write_bytes(b"wav") or output)
     monkeypatch.setattr(
         "bbvs.runner.keyframes.extract_keyframes",
@@ -124,9 +139,10 @@ def test_one_command_runner_executes_all_stages(monkeypatch, tmp_path: Path) -> 
     )
     settings = AppSettings(services=Services(Endpoint("http://llm/v1", "m")), runs_dir=tmp_path / "runs")
 
-    result = run_pipeline("https://video", settings, progress=lambda message: events.append(message))
+    result = run_pipeline("BV1E1xxebEDs", settings, progress=lambda message: events.append(message))
 
     assert result == run_dir
+    assert downloads == ["https://www.bilibili.com/video/BV1E1xxebEDs"]
     assert (run_dir / "audio" / "audio.wav").exists()
     assert len(list((run_dir / "keyframes").glob("*/keyframes.json"))) == 1
     assert len(list((run_dir / "ocr").glob("*/frames.json"))) == 1

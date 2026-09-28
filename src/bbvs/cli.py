@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from . import asr, ingest, keyframes, media, ocr
@@ -24,15 +24,22 @@ from .llm import EmbeddingClient, RerankerClient
 from .runner import run_source
 from .settings import AppSettings
 from .summarize import SUMMARY_PROMPT_VERSION
+from .web import serve
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bbvs", description="BBVS 模块化视频理解工作台")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run_cmd = sub.add_parser("run", help="运行单个视频或 TXT 批量清单并生成报告")
-    run_cmd.add_argument("source", help="视频 URL、已有 run 目录，或每行一个 BV 号的 TXT 清单")
+    run_cmd = sub.add_parser("run", help="按 BV 号运行或续跑视频；也可传入 BV 号 TXT 清单")
+    run_cmd.add_argument("video_id", help="Bilibili BV 号，或每行一个 BV 号的 TXT 清单")
     run_cmd.add_argument("--config", type=Path, default=Path("config/pipeline-basic.yaml"))
+
+    serve_cmd = sub.add_parser("serve", help="启动结果浏览与总结任务 Web 界面")
+    serve_cmd.add_argument("--config", type=Path, default=Path("config/pipeline-basic.yaml"))
+    serve_cmd.add_argument("--runs-dir", type=Path, help="覆盖配置文件中的 runs_dir")
+    serve_cmd.add_argument("--host", default="127.0.0.1")
+    serve_cmd.add_argument("--port", type=int, default=8765)
 
     probe_cmd = sub.add_parser("probe", help="查看本地媒体信息")
     probe_cmd.add_argument("video", type=Path)
@@ -128,7 +135,12 @@ def _emit(value: object, output: Path | None = None) -> None:
 
 def run(args: argparse.Namespace) -> None:
     if args.command == "run":
-        print(run_source(args.source, AppSettings.load(args.config)))
+        print(run_source(args.video_id, AppSettings.load(args.config)))
+    elif args.command == "serve":
+        settings = AppSettings.load(args.config)
+        if args.runs_dir:
+            settings = replace(settings, runs_dir=args.runs_dir)
+        serve(settings, args.host, args.port)
     elif args.command == "probe":
         _emit(media.probe(args.video), args.output)
     elif args.command == "download":
