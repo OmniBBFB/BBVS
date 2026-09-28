@@ -7,14 +7,17 @@ from typing import Any
 
 from .errors import BBVSError
 from .llm import ChatModel, parse_json_content
-from .markdown_artifacts import markdown_title
+from .markdown_artifacts import text_title
 from .models import (
     Chapter, ContentMap, EvidenceUnit, Frame, KnowledgeControl, KnowledgeForm,
     KnowledgeImportance, KnowledgeItem, KnowledgeRelation, KnowledgeRelationType,
-    KnowledgeRole, OutlineChapter, Transcript, VisualAnalysis,
+    KnowledgeRole, OutlineChapter, OutlineTopic, Transcript, VisualAnalysis,
 )
 
-AUTHORING_PROMPT_VERSION = "knowledge-items-markdown-v3"
+AUTHORING_PROMPT_VERSION = "knowledge-topics-text-v4"
+MAX_TOPICS_PER_CHAPTER = 4
+MAX_REQUIRED_ITEMS_PER_TOPIC = 3
+MAX_SUPPORTING_ITEMS_PER_TOPIC = 2
 
 
 def content_map_from_dict(row: dict[str, Any]) -> ContentMap:
@@ -174,12 +177,15 @@ def plan_outline(
     prompt = (
         "Design a global teaching outline from the content maps. Reorganize by conceptual dependency rather than "
         "fixed time windows, while keeping every chapter backed by a contiguous source range. Let essential main "
-        "knowledge drive the outline; include useful supporting items only when they improve comprehension. Never "
-        "require chatter or optional items, and merge repeated knowledge. Keep the output bounded: concept_dependencies "
-        "must be an array of at most 12 short strings; must_preserve must contain at most 20 essential knowledge item "
-        "ids. Return JSON with "
+        "knowledge drive the outline. Aggregate repeated or closely related candidate items across units into reader-"
+        "level topics; a topic is a synthesis, not a restatement of one sentence. Aim for 2-4 topics per chapter and "
+        f"never exceed {MAX_TOPICS_PER_CHAPTER}. Each topic may cite at most {MAX_REQUIRED_ITEMS_PER_TOPIC} required "
+        f"items as core evidence and at most {MAX_SUPPORTING_ITEMS_PER_TOPIC} supporting items. Supporting items must "
+        "attach to exactly one topic and be selected only when they materially improve understanding. Never select "
+        "chatter or optional items. Keep concept_dependencies to at most 12 short strings. Return JSON with "
         "exactly central_question, thesis, concept_dependencies, must_preserve, and chapters. Each chapter uses "
-        "exactly title, start_unit, end_unit, teaching_goal, required_items, visual_requests. "
+        "exactly title, start_unit, end_unit, teaching_goal, topics, visual_requests. Each topic uses exactly title, "
+        "summary, required_items, supporting_items. "
         "Every unit must belong to exactly one chapter and unit ranges "
         "must be ordered, contiguous and non-overlapping.\n"
         + json.dumps({"metadata": metadata, "units": unit_ranges,
@@ -193,7 +199,11 @@ def plan_outline(
     chapters = [OutlineChapter(
         title=str(row.get("title", "")), start_unit=str(row.get("start_unit", "")),
         end_unit=str(row.get("end_unit", "")), teaching_goal=str(row.get("teaching_goal", "")),
-        required_items=[str(value) for value in row.get("required_items", [])],
+        topics=[OutlineTopic(
+            title=str(topic.get("title", "")), summary=str(topic.get("summary", "")),
+            required_items=[str(value) for value in topic.get("required_items", [])],
+            supporting_items=[str(value) for value in topic.get("supporting_items", [])],
+        ) for topic in row.get("topics", []) if isinstance(topic, dict)],
         visual_requests=[value for value in row.get("visual_requests", []) if isinstance(value, dict)],
     ) for row in payload.get("chapters", [])]
     _validate_outline(units, maps, chapters)
@@ -220,7 +230,18 @@ def _validate_outline(
         if left > right:
             raise ValueError("outline chapter range is reversed")
         covered.extend(ids[left:right + 1])
-        for item_id in chapter.required_items:
+        if len(chapter.topics) > MAX_TOPICS_PER_CHAPTER:
+            raise ValueError(f"outline chapter exceeds {MAX_TOPICS_PER_CHAPTER} report topics")
+        topic_required = [item_id for topic in chapter.topics for item_id in topic.required_items]
+        topic_supporting = [item_id for topic in chapter.topics for item_id in topic.supporting_items]
+        for topic in chapter.topics:
+            if not topic.title or not topic.summary or not topic.required_items:
+                raise ValueError("every report topic needs title, summary, and required items")
+            if len(topic.required_items) > MAX_REQUIRED_ITEMS_PER_TOPIC:
+                raise ValueError("report topic has too many required items")
+            if len(topic.supporting_items) > MAX_SUPPORTING_ITEMS_PER_TOPIC:
+                raise ValueError("report topic has too many supporting items")
+        for item_id in topic_required + topic_supporting:
             if item_id not in item_by_id:
                 raise ValueError(f"outline references an unknown required item: {item_id}")
             item, source_unit = item_by_id[item_id]
@@ -233,36 +254,27 @@ def _validate_outline(
         raise ValueError("outline chapters must cover all evidence units exactly once in source order")
     if len(required) != len(set(required)):
         raise ValueError("outline required items must not repeat")
-    essential = {
-        item.id for item, _ in item_by_id.values()
-        if item.control.importance is KnowledgeImportance.ESSENTIAL
-        and item.control.role is not KnowledgeRole.CHATTER
-    }
-    missing = essential - set(required)
-    if missing:
-        raise ValueError(f"outline omits essential required items: {', '.join(sorted(missing))}")
 
 
-def _report_sections(maps: list[ContentMap]) -> dict[str, list[dict[str, Any]]]:
-    sections: dict[str, list[dict[str, Any]]] = {
-        "core_knowledge": [],
-        "explanations_and_examples": [],
-        "supplementary": [],
-    }
+def _report_topics(maps: list[ContentMap], chapter: OutlineChapter) -> list[dict[str, Any]]:
+    item_by_id: dict[str, tuple[KnowledgeItem, str]] = {}
     for content_map in maps:
         for item in content_map.knowledge_items:
-            control = item.control
-            if control.role is KnowledgeRole.CHATTER or control.importance is KnowledgeImportance.OPTIONAL:
-                continue
-            payload = asdict(item)
-            payload["source_unit"] = content_map.unit_id
-            if control.role is KnowledgeRole.MAIN and control.importance is KnowledgeImportance.ESSENTIAL:
-                sections["core_knowledge"].append(payload)
-            elif control.role is KnowledgeRole.ANECDOTE or control.form is KnowledgeForm.CONTEXT:
-                sections["supplementary"].append(payload)
-            else:
-                sections["explanations_and_examples"].append(payload)
-    return sections
+            item_by_id[item.id] = (item, content_map.unit_id)
+
+    def selected(item_ids: list[str]) -> list[dict[str, Any]]:
+        result = []
+        for item_id in item_ids:
+            item, unit_id = item_by_id[item_id]
+            result.append({**asdict(item), "source_unit": unit_id})
+        return result
+
+    return [{
+        "title": topic.title,
+        "summary": topic.summary,
+        "required_items": selected(topic.required_items),
+        "supporting_items": selected(topic.supporting_items),
+    } for topic in chapter.topics]
 
 
 def draft_chapters(
@@ -278,6 +290,12 @@ def draft_chapters(
         left, right = positions[chapter.start_unit], positions[chapter.end_unit]
         source_units = units[left:right + 1]
         source_maps = [maps_by_id[row.unit_id] for row in source_units]
+        report_topics = _report_topics(source_maps, chapter)
+        selected_unit_ids = {
+            item["source_unit"] for topic in report_topics
+            for key in ("required_items", "supporting_items") for item in topic[key]
+        }
+        selected_units = [row for row in source_units if row.unit_id in selected_unit_ids]
         chapter_visuals = [asdict(row) for row in visuals
                            if source_units[0].start <= row.timestamp < source_units[-1].end]
         map_context = []
@@ -287,31 +305,30 @@ def draft_chapters(
             map_context.append(payload)
         evidence = {
             "outline": asdict(chapter),
-            "units": [asdict(row) for row in source_units],
-            "report_sections": _report_sections(source_maps),
+            "selected_source_units": [asdict(row) for row in selected_units],
+            "report_topics": report_topics,
             "content_map_context": map_context,
             "visuals": chapter_visuals,
         }
         prompt = (
-            "Write a concise Chinese teaching chapter grounded only in this evidence. Treat report_sections as the "
-            "content plan: explain every core_knowledge item, use explanations_and_examples only when they materially "
-            "help understanding, and keep supplementary brief. Content omitted from report_sections, including "
-            "optional material and chatter, must not appear. Organize the reader-facing chapter under `### 核心知识`, "
-            "`### 解释与例子`, and `### 补充内容` as applicable; omit empty sections. Use each item's "
-            "Chinese content_label naturally as a small label when useful, but never expose English control enum names. "
-            "Do not replay the transcript chronologically or repeat equivalent items. Refer to selected visuals by "
+            "Write a concise Chinese teaching chapter grounded only in this evidence. Treat report_topics as the "
+            "complete content plan. Write one coherent explanation per topic by synthesizing its required_items; do not "
+            "describe those items one by one. Use supporting_items only inside their parent topic and only when needed "
+            "for comprehension. Content not selected into report_topics must not appear. Never expose English control "
+            "enum names. Do not replay the transcript chronologically or repeat equivalent items. Refer to visuals by "
             "timestamp when they support the explanation; if a formula slide is "
-            "available, explain its role from speech context without transcribing the formula. Return only a complete "
-            "Markdown chapter. Start with one level-2 heading, use prose and lists naturally, and do not wrap the "
-            "document in a code fence.\n" + json.dumps(evidence, ensure_ascii=False)
+            "available, explain its role from speech context without transcribing the formula. Return plain text only. "
+            "Do not use Markdown syntax such as #, *, -, backticks, or tables. Start with `标题：...`, then use plain "
+            "section labels such as `核心知识：`, `理解辅助：`, and `结论：`; omit empty sections.\n"
+            + json.dumps(evidence, ensure_ascii=False)
         )
-        markdown = client.chat(
+        text = client.chat(
             model=model, messages=[{"role": "user", "content": prompt}], max_tokens=8192,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         ).strip()
         result.append(Chapter(
-            title=markdown_title(markdown, chapter.title), start=source_units[0].start,
-            end=source_units[-1].end, summary=markdown,
+            title=text_title(text, chapter.title), start=source_units[0].start,
+            end=source_units[-1].end, summary=text,
         ))
         if checkpoint:
             checkpoint(result)
@@ -319,23 +336,24 @@ def draft_chapters(
 
 
 def review_coverage(
-    units: list[EvidenceUnit], maps: list[ContentMap], chapters: list[Chapter],
+    units: list[EvidenceUnit], maps: list[ContentMap], outline: list[OutlineChapter],
+    chapters: list[Chapter],
     client: ChatModel, model: str,
     existing_reviews: list[dict[str, Any]] | None = None,
     checkpoint: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> dict[str, Any]:
-    maps_by_id = {row.unit_id: row for row in maps}
     reviews = list(existing_reviews or [])
-    for chapter in chapters[len(reviews):]:
-        chapter_units = [row for row in units if row.end > chapter.start and row.start < chapter.end]
+    for index, chapter in enumerate(chapters[len(reviews):], len(reviews)):
+        planned = outline[index]
         prompt = (
-            "Audit this single drafted chapter against its classified knowledge items. Missing essential items, a "
-            "broken reasoning chain, distortions, and unsupported claims are errors. Missing useful supporting items "
-            "matters only when comprehension suffers; omission of optional items or chatter is expected and must not "
-            "be reported. Ignore wording preferences. Keep every array to at most 12 concise items. Return JSON with "
+            "Audit this drafted chapter only against its selected report topics. Missing a selected topic or its "
+            "required core evidence, a broken reasoning chain, distortions, and unsupported claims are errors. "
+            "Unselected candidate items must not be requested or reported as missing. A selected supporting item "
+            "matters only when comprehension suffers. Ignore wording preferences. Keep every array to at most 12 "
+            "concise items. Return JSON with "
             "exactly missing_essential, lost_reasoning, distortions, unsupported_claims, and coherence_issues.\n"
             + json.dumps({
-                "content_maps": [asdict(maps_by_id[row.unit_id]) for row in chapter_units],
+                "report_topics": _report_topics(maps, planned),
                 "chapter": asdict(chapter),
             }, ensure_ascii=False)
         )
@@ -362,9 +380,9 @@ def synthesize(chapters: list[Chapter], outline: dict[str, Any], client: ChatMod
         "Create a concise Chinese global synthesis from these completed teaching chapters and their outline. Lead "
         "with the central question, core knowledge, reasoning chain, and cross-chapter connections. Do not replay or "
         "recap every chapter. Keep only examples needed to understand a core idea, preserve material qualifications, "
-        "and omit anecdotes and chatter. Return only a complete Markdown report with a title, a brief summary, a "
-        "core-knowledge section, and a takeaways section. Keep lists to at most 12 concise items each. Do not use a "
-        "wrapping code fence.\n"
+        "and omit anecdotes and chatter. Return plain text only, with `标题：`, `内容摘要：`, `核心知识：`, and "
+        "`核心结论：` as plain section labels. Do not use Markdown syntax such as #, *, -, backticks, or tables. "
+        "Keep each section concise and do not enumerate every source item.\n"
         + json.dumps({"outline": outline, "chapters": [asdict(row) for row in chapters]}, ensure_ascii=False)
     )
     return client.chat(

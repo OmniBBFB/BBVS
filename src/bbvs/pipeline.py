@@ -7,9 +7,9 @@ from .config import Services
 from .artifacts import find_inputs
 from .io import read_json, write_json, write_text
 from .llm import EmbeddingClient, RerankerClient, create_chat_client
-from .markdown_artifacts import load_markdown_chapters, write_markdown_chapters
+from .markdown_artifacts import load_text_chapters, write_text_chapters
 from .models import (
-    ContentMap, Correction, EvidenceUnit, Frame, OutlineChapter, Term,
+    ContentMap, Correction, EvidenceUnit, Frame, OutlineChapter, OutlineTopic, Term,
     TimelineSegment, Transcript, VisualAnalysis,
 )
 from .summarize import summarize_timeline
@@ -145,7 +145,11 @@ class VideoPipeline:
                 outline = [OutlineChapter(
                     title=str(row.get("title", "")), start_unit=str(row.get("start_unit", "")),
                     end_unit=str(row.get("end_unit", "")), teaching_goal=str(row.get("teaching_goal", "")),
-                    required_items=[str(value) for value in row.get("required_items", [])],
+                    topics=[OutlineTopic(
+                        title=str(topic.get("title", "")), summary=str(topic.get("summary", "")),
+                        required_items=[str(value) for value in topic.get("required_items", [])],
+                        supporting_items=[str(value) for value in topic.get("supporting_items", [])],
+                    ) for topic in row.get("topics", []) if isinstance(topic, dict)],
                     visual_requests=[value for value in row.get("visual_requests", []) if isinstance(value, dict)],
                 ) for row in outline_payload.get("chapters", [])]
             else:
@@ -177,8 +181,8 @@ class VideoPipeline:
         timeline = build_timeline(transcript, frames, terms, visuals)
         write_json(analysis_dir / "timeline.json", [asdict(row) for row in timeline])
         if summarize and authoring:
-            existing_chapters = load_markdown_chapters(analysis_dir) if authoring_cache_current else []
-            save_chapters = lambda rows: write_markdown_chapters(analysis_dir, rows)
+            existing_chapters = load_text_chapters(analysis_dir) if authoring_cache_current else []
+            save_chapters = lambda rows: write_text_chapters(analysis_dir, rows)
             chapters = draft_chapters(
                 units, content_maps, outline, visuals, self.llm, self.services.llm.model,
                 existing_chapters=existing_chapters, checkpoint=save_chapters,
@@ -193,16 +197,16 @@ class VideoPipeline:
                 )
                 save_reviews = lambda rows: write_json(review_progress_path, {"chapters": rows})
                 review = review_coverage(
-                    units, content_maps, chapters, self.llm, self.services.llm.model,
+                    units, content_maps, outline, chapters, self.llm, self.services.llm.model,
                     existing_reviews=progress.get("chapters", []), checkpoint=save_reviews,
                 )
                 write_json(review_path, review)
-            summary_path = analysis_dir / "report.md"
+            summary_path = analysis_dir / "report.txt"
             if not authoring_cache_current or not summary_path.exists():
                 report = synthesize(chapters, outline_payload, self.llm, self.services.llm.model)
                 write_text(summary_path, report + "\n")
         elif summarize:
-            summary_path = analysis_dir / "report.md"
+            summary_path = analysis_dir / "report.txt"
             summary_mode_path = analysis_dir / "summary-mode.json"
             chinese_source = (transcript.language or "").casefold().startswith(("zh", "cmn", "yue"))
             expected_mode = {
@@ -216,8 +220,8 @@ class VideoPipeline:
             if not summary_current:
                 saved_mode = read_json(summary_mode_path) if summary_mode_path.exists() else {}
                 mode_current = saved_mode == expected_mode
-                existing = load_markdown_chapters(analysis_dir) if mode_current else []
-                save_chapters = lambda rows: write_markdown_chapters(analysis_dir, rows)
+                existing = load_text_chapters(analysis_dir) if mode_current else []
+                save_chapters = lambda rows: write_text_chapters(analysis_dir, rows)
                 write_json(summary_mode_path, expected_mode)
                 chapters, report = summarize_timeline(
                     timeline, self.llm, self.services.llm.model,

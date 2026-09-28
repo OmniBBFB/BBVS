@@ -227,6 +227,7 @@ def render_detail(catalog: RunCatalog, record: RunRecord, frame_page: int = 1) -
     frame_page = min(max(frame_page, 1), page_count)
     shown = frames[(frame_page - 1) * per_page:frame_page * per_page]
     docs = list(record.reports)
+    docs.extend(path / "report.txt" for path in record.analyses if (path / "report.txt").exists())
     docs.extend(path / "report.md" for path in record.analyses if (path / "report.md").exists())
     doc_html = "".join(
         f'<a class="doc" href="/{"markdown" if path.suffix == ".md" else "asset"}?run={quote(record.name)}&path={quote(path.relative_to(record.path).as_posix())}" target="_blank">{html.escape(path.relative_to(record.path).as_posix())}</a>'

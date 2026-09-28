@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from bbvs.io import write_json
-from bbvs.markdown_artifacts import write_markdown_chapters
+from bbvs.markdown_artifacts import write_markdown_chapters, write_text_chapters
 from bbvs.models import Chapter
 from bbvs.report import ReportOptions, build_html, export_report
 
@@ -120,3 +120,18 @@ def test_report_prefers_markdown_artifacts_and_escapes_model_html(tmp_path: Path
     assert "新章节" in document and "<li>要点</li>" in document
     assert "旧总结" not in document
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in document
+
+
+def test_report_renders_plain_text_without_interpreting_markdown(tmp_path: Path) -> None:
+    run = sample_run(tmp_path)
+    analysis = run / "analysis"
+    write_text_chapters(analysis, [
+        Chapter("纯文本章节", 0, 60, "标题：纯文本章节\n\n核心知识：星号 **只是字符**。"),
+    ])
+    (analysis / "report.txt").write_text("标题：纯文本报告\n\n内容摘要：不生成 Markdown。\n", encoding="utf-8")
+
+    document = build_html(run, ReportOptions(max_images=0))
+
+    assert "核心知识：星号 **只是字符**。" in document
+    assert "标题：纯文本报告" in document
+    assert 'class="plain-text"' in document

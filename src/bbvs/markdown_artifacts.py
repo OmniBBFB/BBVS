@@ -12,6 +12,25 @@ def markdown_title(content: str, fallback: str) -> str:
     return match.group(1).strip() if match else fallback
 
 
+def text_title(content: str, fallback: str) -> str:
+    match = re.search(r"^\s*(?:标题[：:]\s*)?(.+?)\s*$", content, re.MULTILINE)
+    return re.sub(r"^#{1,6}\s+", "", match.group(1)).strip() if match else fallback
+
+
+def write_text_chapters(analysis_dir: Path, chapters: list[Chapter]) -> None:
+    chapter_dir = analysis_dir / "chapters"
+    chapter_dir.mkdir(parents=True, exist_ok=True)
+    manifest = []
+    for index, chapter in enumerate(chapters, 1):
+        relative = Path("chapters") / f"{index:03d}.txt"
+        write_text(analysis_dir / relative, chapter.summary.strip() + "\n")
+        manifest.append({
+            "file": relative.as_posix(), "title": chapter.title,
+            "start": chapter.start, "end": chapter.end,
+        })
+    write_json(analysis_dir / "chapters-manifest.json", manifest)
+
+
 def write_markdown_chapters(analysis_dir: Path, chapters: list[Chapter]) -> None:
     chapter_dir = analysis_dir / "chapters"
     chapter_dir.mkdir(parents=True, exist_ok=True)
@@ -41,3 +60,8 @@ def load_markdown_chapters(analysis_dir: Path) -> list[Chapter]:
             end=float(row.get("end", 0)), summary=path.read_text(encoding="utf-8"),
         ))
     return chapters
+
+
+def load_text_chapters(analysis_dir: Path) -> list[Chapter]:
+    """Load current plain-text chapters and legacy Markdown/JSON manifests."""
+    return load_markdown_chapters(analysis_dir)

@@ -4,10 +4,10 @@ import json
 from collections.abc import Callable
 
 from .llm import ChatModel
-from .markdown_artifacts import markdown_title
+from .markdown_artifacts import text_title
 from .models import Chapter, TimelineSegment
 
-SUMMARY_PROMPT_VERSION = "first-person-markdown-v2"
+SUMMARY_PROMPT_VERSION = "first-person-text-v3"
 
 
 def summarize_timeline(
@@ -32,7 +32,8 @@ def summarize_timeline(
                 "以讲述者本人的第一人称视角，用自然中文总结以下时间证据，不得编造事实。"
                 "summary 应像我在亲自归纳自己的讲述；不要使用“讲述者”“作者”“本视频”等第三人称或旁观者表述，"
                 "也不要为了强调视角而在每句话机械重复“我”。title 使用简洁的主题短语。"
-                "只返回完整 Markdown 章节，以二级标题开头，正文后可列出关键要点；不要使用包裹全文的代码围栏。"
+                "只返回纯文本章节，以“标题：”开头，可使用“内容摘要：”“关键要点：”等普通标签；"
+                "不要使用 Markdown 符号（#、*、-、反引号或表格）。"
                 "关键概念和必要外文专名应以中文为主，可在括号中保留原文；不要翻译成英文。\n"
                 + json.dumps(evidence, ensure_ascii=False)
             )
@@ -43,18 +44,18 @@ def summarize_timeline(
                 "speaker's first-person voice, as if I am concisely recapping my own explanation. Do not refer to "
                 "the speaker, author, presenter, or video in the third person, and do not mechanically begin every "
                 "sentence with 'I'. Keep the title as a concise topic phrase. Apply the same perspective to the "
-                "Chinese translation. Return only a complete Markdown chapter starting with a level-2 heading. "
-                "Use clearly labelled original-language and Chinese sections with aligned key-point lists. "
-                "Do not wrap the document in a code fence.\n" + json.dumps(evidence, ensure_ascii=False)
+                "Chinese translation. Return plain text only, beginning with `Title:` and using ordinary labelled "
+                "sections for the original language and Chinese. Do not use Markdown symbols (#, *, -, backticks, "
+                "or tables).\n" + json.dumps(evidence, ensure_ascii=False)
             )
-        markdown = client.chat(
+        text = client.chat(
             model=model, messages=[{"role": "user", "content": prompt}], max_tokens=2048,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         ).strip()
         chapters.append(Chapter(
-            title=markdown_title(markdown, f"Chapter {len(chapters) + 1}"),
+            title=text_title(text, f"Chapter {len(chapters) + 1}"),
             start=group[0].start, end=group[-1].end,
-            summary=markdown,
+            summary=text,
         ))
         if checkpoint:
             checkpoint(chapters)
@@ -67,7 +68,8 @@ def summarize_timeline(
         final_prompt = (
             "基于以下章节，以讲述者本人的第一人称视角生成简洁的中文内容总结。"
             "summary 应像我在回顾并归纳自己的完整讲述；不要写成“讲述者介绍了”“作者认为”或“本视频讨论了”，"
-            "也不要在每句话机械重复“我”。只返回完整 Markdown 报告，包含标题、内容总结、关键概念和核心结论。"
+            "也不要在每句话机械重复“我”。只返回纯文本报告，使用“标题：”“内容总结：”“关键概念：”"
+            "和“核心结论：”等普通标签，不要使用 Markdown 符号（#、*、-、反引号或表格）。"
             "summary 不超过 500 个汉字；key_concepts 和 takeaways 各不超过 8 项，每项不超过 40 个汉字。"
             "所有概念使用自然中文；必要外文专名可在括号中保留原文，不要另造英文版本。\n"
             + json.dumps(condensed, ensure_ascii=False)
@@ -77,8 +79,9 @@ def summarize_timeline(
             "Create an evidence-grounded video report. Preserve the original language and provide an aligned Chinese "
             "translation. Write both summaries in the speaker's first-person voice, as if I am recapping my own "
             "explanation. Never describe the speaker, author, presenter, or video from a third-person observer's "
-            "perspective, and avoid mechanically starting every sentence with 'I'. Return only a complete Markdown "
-            "report with clearly labelled original-language and Chinese summary, key-concepts, and takeaways sections. "
+            "perspective, and avoid mechanically starting every sentence with 'I'. Return plain text only with "
+            "clearly labelled original-language and Chinese summary, key-concepts, and takeaways sections. Do not "
+            "use Markdown symbols (#, *, -, backticks, or tables). "
             "Keep the original summary under 350 words and the Chinese summary under 500 Chinese characters. Limit "
             "each list to 8 short items and keep the original and Chinese lists aligned.\n"
             + json.dumps(condensed, ensure_ascii=False)

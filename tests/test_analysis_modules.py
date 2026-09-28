@@ -167,14 +167,17 @@ def test_analysis_resumes_nested_knowledge_items_from_content_map_cache(tmp_path
         "central_question": "复合是否保持连续性",
         "chapters": [{
             "title": "复合连续性", "start_unit": "u_0001", "end_unit": "u_0001",
-            "teaching_goal": "说明定理", "required_items": ["k_001"], "visual_requests": [],
+            "teaching_goal": "说明定理", "visual_requests": [], "topics": [{
+                "title": "复合连续性", "summary": "连续函数的复合仍连续",
+                "required_items": ["k_001"], "supporting_items": [],
+            }],
         }],
     })
     pipeline = VideoPipeline(Services(Endpoint("http://unused/v1", "m")))
     pipeline.llm = FakeChat([
-        "## 复合连续性\n\n### 核心知识\n\n连续函数的复合仍然连续。",
+        "标题：复合连续性\n\n核心知识：连续函数的复合仍然连续。",
         {"missing_essential": [], "distortions": [], "unsupported_claims": [], "coherence_issues": []},
-        "# 连续性报告\n\n## 核心知识\n\n复合连续。",
+        "标题：连续性报告\n\n核心知识：复合连续。",
     ])
 
     pipeline.analyze(
@@ -184,7 +187,7 @@ def test_analysis_resumes_nested_knowledge_items_from_content_map_cache(tmp_path
 
     chapter_prompt = pipeline.llm.requests[0]["messages"][0]["content"]
     assert '"content_label": "定理"' in chapter_prompt
-    assert (analysis_dir / "report.md").read_text(encoding="utf-8").startswith("# 连续性报告")
+    assert (analysis_dir / "report.txt").read_text(encoding="utf-8").startswith("标题：连续性报告")
 
 
 def test_analysis_rebuilds_authoring_outputs_when_prompt_version_is_stale(tmp_path: Path) -> None:
@@ -217,15 +220,18 @@ def test_analysis_rebuilds_authoring_outputs_when_prompt_version_is_stale(tmp_pa
         }]},
         {
             "central_question": "什么是核心结论", "thesis": "核心结论", "concept_dependencies": [],
-            "must_preserve": ["u_0001_k_001"], "chapters": [{
-                "title": "核心知识", "start_unit": "u_0001", "end_unit": "u_0001",
-                "teaching_goal": "解释结论", "required_items": ["u_0001_k_001"], "visual_requests": [],
+                "must_preserve": ["u_0001_k_001"], "chapters": [{
+                    "title": "核心知识", "start_unit": "u_0001", "end_unit": "u_0001",
+                    "teaching_goal": "解释结论", "visual_requests": [], "topics": [{
+                        "title": "核心结论", "summary": "解释核心结论",
+                        "required_items": ["u_0001_k_001"], "supporting_items": [],
+                    }],
             }],
         },
-        "## 核心知识\n\n### 核心知识\n\n新结论。",
+        "标题：核心知识\n\n核心知识：新结论。",
         {"missing_essential": [], "lost_reasoning": [], "distortions": [],
          "unsupported_claims": [], "coherence_issues": []},
-        "# 新报告\n\n## 核心知识\n\n新结论。",
+        "标题：新报告\n\n核心知识：新结论。",
     ])
 
     pipeline.analyze(
@@ -233,7 +239,7 @@ def test_analysis_rebuilds_authoring_outputs_when_prompt_version_is_stale(tmp_pa
         frames_path=frames_path, analysis_dir=analysis_dir,
     )
 
-    assert (analysis_dir / "report.md").read_text(encoding="utf-8").startswith("# 新报告")
+    assert (analysis_dir / "report.txt").read_text(encoding="utf-8").startswith("标题：新报告")
     assert read_json(analysis_dir / "authoring-version.json") == {
         "prompt_version": AUTHORING_PROMPT_VERSION,
     }

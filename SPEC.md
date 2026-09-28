@@ -158,8 +158,8 @@ runs/<id>-<title>/
 │       ├── visual-analysis.json
 │       ├── timeline.json
 │       ├── chapters-manifest.json
-│       ├── chapters/*.md
-│       └── report.md
+│       ├── chapters/*.txt
+│       └── report.txt
 └── reports/
     └── <analysis-report-variant>/*.html|*.pdf
 ```
@@ -269,14 +269,14 @@ Content Map 每个 Evidence Unit 对应一项，并包含原子 Knowledge Item�
 
 ### 6.6 Chapter
 
-章节正文由模型直接返回 Markdown，写入 `chapters/NNN.md`，不得要求模型将长正文编码进 JSON。
-中文来源只写中文；非中文来源应在同一 Markdown 中使用清晰小节保留原语言及中文翻译。
+章节正文由模型直接返回纯文本，写入 `chapters/NNN.txt`，不得要求模型将长正文编码进 JSON，也不得生成 Markdown 标记。
+中文来源只写中文；非中文来源应在同一纯文本中使用清晰标签保留原语言及中文翻译。
 
 `chapters-manifest.json` 由程序生成，只记录 `file`、`title`、`start`、`end`。模型生成的标题缺失时，程序允许使用确定性的章节编号作为回退。
 
 ### 6.7 Summary
 
-最终综合由模型直接返回 Markdown，写入 `report.md`，不得要求模型将长正文编码进 JSON。
+最终综合由模型直接返回纯文本，写入 `report.txt`，不得要求模型将长正文编码进 JSON，也不得生成 Markdown 标记。
 中文来源包含总结、关键概念与核心结论；非中文来源还必须提供语义对齐的中文小节。
 `summary-mode.json` 由程序记录 `source_language` 和 `translation_mode`，后者为 `monolingual` 或 `bilingual_zh`。
 
@@ -409,7 +409,7 @@ BBVS_<NAME>_TIMEOUT
 
 `<NAME>` 为 `LLM`、`VLM`、`EMBEDDING` 或 `RERANKER`。
 
-结构化模型输出必须请求 `response_format={"type":"json_object"}`。客户端允许清理 Markdown code fence，但无效或截断 JSON 必须报错，不得静默猜测。章节正文和最终综合必须请求纯 Markdown，不得设置 JSON `response_format`。
+结构化模型输出必须请求 `response_format={"type":"json_object"}`。客户端允许清理 Markdown code fence，但无效或截断 JSON 必须报错，不得静默猜测。章节正文和最终综合必须请求纯文本，不得设置 JSON `response_format`。
 
 ## 9. 缓存与恢复
 
@@ -420,8 +420,8 @@ BBVS_<NAME>_TIMEOUT
 | `terminology.json` | 直接加载 |
 | `verified-transcript.json` | 使用校验结果，不重复调用 LLM |
 | `visual-analysis.json` | 直接加载；仅补齐缺失中文翻译 |
-| `chapters-manifest.json` + `chapters/*.md` | 语言模式一致且文件连续存在时复用已有章节并继续 |
-| `report.md` | 不重复生成总结 |
+| `chapters-manifest.json` + `chapters/*.txt` | 语言模式一致且文件连续存在时复用已有章节并继续 |
+| `report.txt` | 不重复生成总结 |
 
 任何缓存文件存在但 JSON 无效时应直接失败并暴露问题，不应自动忽略损坏产物。
 

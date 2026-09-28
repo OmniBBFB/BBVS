@@ -158,12 +158,20 @@ class ContentMap:
 
 
 @dataclass(slots=True)
+class OutlineTopic:
+    title: str
+    summary: str
+    required_items: list[str] = field(default_factory=list)
+    supporting_items: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class OutlineChapter:
     title: str
     start_unit: str
     end_unit: str
     teaching_goal: str = ""
-    required_items: list[str] = field(default_factory=list)
+    topics: list[OutlineTopic] = field(default_factory=list)
     visual_requests: list[dict[str, Any]] = field(default_factory=list)
 
 

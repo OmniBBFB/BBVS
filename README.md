@@ -67,7 +67,7 @@ uv run bbvs serve --config config/pipeline-basic.yaml
 ```
 
 浏览器打开 `http://127.0.0.1:8765`。首页可以按 BV 号、标题、作者、标签和 yt-dlp 描述搜索；
-详情页可以查看各分析版本、Markdown/HTML/PDF 报告和分页关键帧画廊。首页还可以输入 BV 号或
+详情页可以查看各分析版本、纯文本/HTML/PDF 报告和分页关键帧画廊。首页还可以输入 BV 号或
 Bilibili 视频 URL，在后台启动与 `bbvs run BV号` 相同的总结任务；进度页会实时显示流水线阶段、重试和错误。
 `--runs-dir` 可以覆盖配置文件中的目录。服务默认只监听本机；需要从局域网访问时可显式设置
 `--host 0.0.0.0`，并用 `--port` 修改端口。界面没有账户鉴权，不应直接暴露到公网。
@@ -277,4 +277,4 @@ uv run bbvs export-report 'runs/BVxxxx-视频标题' \
   --output 'runs/BVxxxx-视频标题/report.pdf'
 ```
 
-增加 `--include-transcript` 可附带完整转录。报告只读取已有 JSON/Markdown 产物，不会自动调用 LLM/VLM；缺失阶段会在报告中明确标注。
+增加 `--include-transcript` 可附带完整转录。报告只读取已有 JSON/纯文本产物（并兼容旧 Markdown），不会自动调用 LLM/VLM；缺失阶段会在报告中明确标注。

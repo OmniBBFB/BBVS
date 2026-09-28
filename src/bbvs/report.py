@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from .errors import DependencyError
 from .io import read_json
-from .markdown_artifacts import load_markdown_chapters
+from .markdown_artifacts import load_text_chapters
 
 REPORT_VERSION = "vlm-verified-visuals-v2"
 
@@ -107,6 +107,11 @@ def _markdown_html(markdown: str) -> str:
     return "".join(parts)
 
 
+def _plain_text_html(content: str) -> str:
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", content) if part.strip()]
+    return "".join(f'<p class="plain-text">{html.escape(part)}</p>' for part in paragraphs)
+
+
 def _timestamp_link(url: str, seconds: float) -> str:
     separator = "&" if "?" in url else "?"
     target = html.escape(f"{url}{separator}t={int(seconds)}") if url else "#"
@@ -152,6 +157,11 @@ def _visual_timeline_cards(
 
 
 def _chapter_html(row: dict[str, Any], url: str) -> str:
+    if "text" in row:
+        return (
+            f'<section class="chapter"><div class="time">{_timestamp_link(url, row.get("start", 0))}–'
+            f'{_timestamp_link(url, row.get("end", 0))}</div>{_plain_text_html(str(row["text"]))}</section>'
+        )
     if "markdown" in row:
         return (
             f'<section class="chapter"><div class="time">{_timestamp_link(url, row.get("start", 0))}–'
@@ -207,6 +217,7 @@ th { background: #f0f4f8; text-align: left; }
 a { color: #2563eb; text-decoration: none; }
 .transcript { font-size: 8.7pt; }
 .transcript p { margin: 1.5mm 0; }
+.plain-text { white-space: pre-wrap; }
 """
 
 
@@ -218,12 +229,16 @@ def build_html(
     source = run_dir / "source"
     analysis = analysis_dir or run_dir / "analysis"
     metadata = _load(source / "metadata.json", {})
+    report_text_path = analysis / "report.txt"
     report_markdown_path = analysis / "report.md"
     summary = _load(analysis / "summary.json", {})
-    markdown_chapters = load_markdown_chapters(analysis)
+    text_chapters = load_text_chapters(analysis)
+    manifest = _load(analysis / "chapters-manifest.json", [])
+    current_text = bool(manifest) and all(str(row.get("file", "")).endswith(".txt") for row in manifest)
     chapters = (
-        [{"title": row.title, "start": row.start, "end": row.end, "markdown": row.summary}
-         for row in markdown_chapters]
+        [{"title": row.title, "start": row.start, "end": row.end,
+          "text" if current_text else "markdown": row.summary}
+         for row in text_chapters]
         if (analysis / "chapters-manifest.json").exists()
         else _load(analysis / "chapters.json", [])
     )
@@ -231,7 +246,8 @@ def build_html(
     corrections = _load(analysis / "corrections.json", [])
     timeline = _load(analysis / "timeline.json", [])
     expected_stages = [
-        ("全局摘要", report_markdown_path.exists() or bool(summary)), ("章节摘要", bool(chapters)),
+        ("全局摘要", report_text_path.exists() or report_markdown_path.exists() or bool(summary)),
+        ("章节摘要", bool(chapters)),
         ("转录校正", (analysis / "verified-transcript.json").exists()),
     ]
     if options.expect_vision:
@@ -243,7 +259,11 @@ def build_html(
     warning = f'<div class="warning">本报告基于已有产物生成；尚未运行：{_text("、".join(missing))}。</div>' if missing else ""
 
     summary_html = ""
-    if report_markdown_path.exists():
+    if report_text_path.exists():
+        summary_html = '<section class="text-report">' + _plain_text_html(
+            report_text_path.read_text(encoding="utf-8")
+        ) + "</section>"
+    elif report_markdown_path.exists():
         summary_html = '<section class="markdown-report">' + _markdown_html(
             report_markdown_path.read_text(encoding="utf-8")
         ) + "</section>"

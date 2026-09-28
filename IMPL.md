@@ -28,15 +28,15 @@ Transcript + OCR → EvidenceUnit → ContentMap → Global Outline
 
 - `build_evidence_units`：产生稳定的原子证据封装；默认约 120 秒，但明确不代表章节。
 - `map_content`：抽取原子 Knowledge Item；`form/role/importance` 使用固定英文枚举，`content_label` 使用模型生成的中文领域词汇，同时保留公式/代码和视觉需求。
-- `plan_outline`：按概念依赖规划全局章节，以 essential/main item 为主线，并验证所有 evidence unit 恰好覆盖一次。
+- `plan_outline`：跨 Evidence Unit 聚合为读者级 Report Topic；每章最多 4 个主题，每主题最多 3 个核心证据和 2 个辅助证据，并验证所有 evidence unit 恰好覆盖一次。
 - `select_requested_frames`：按视觉需求时间范围选择候选；每个需求的候选与保留数量均可配置，无视频级上限。
-- `draft_chapters`：程序按控制枚举生成“核心知识 / 解释与例子 / 补充内容”写作清单，省略 optional/chatter，再读取原始证据完成纯 Markdown 章节。
-- `review_coverage`：独立报告 essential 遗漏、推理链断裂、失真、无证据论断和连贯性问题，不惩罚 optional/chatter 的省略。
-- `synthesize`：以核心知识和跨章联系为主生成纯 Markdown 全局综合，不逐章复述。
+- `draft_chapters`：只读取大纲主题显式选择的核心项与辅助项；同一主题内综合表达，不逐项复述，输出纯文本章节。
+- `review_coverage`：只审查已选 Report Topic 的遗漏、推理链、失真、无证据论断和连贯性，不要求补回未选候选项。
+- `synthesize`：以核心知识和跨章联系为主生成纯文本全局综合，不逐章复述。
 
-长文本产物写入 `chapters/*.md` 和 `report.md`。`chapters-manifest.json` 仅由程序维护文件名、标题和时间范围，
-用于断点续跑；结构化抽取、outline 和 coverage review 仍使用 JSON。报告读取新 Markdown 产物，同时兼容旧的
-`chapters.json` 与 `summary.json`。
+长文本产物写入 `chapters/*.txt` 和 `report.txt`。`chapters-manifest.json` 仅由程序维护文件名、标题和时间范围，
+用于断点续跑；结构化抽取、outline 和 coverage review 仍使用 JSON。报告优先读取纯文本产物，同时只读兼容旧的
+Markdown、`chapters.json` 与 `summary.json`。
 
 `authoring-version.json` 和完成状态记录 `AUTHORING_PROMPT_VERSION`。版本改变时复用原始 Evidence Unit，重建
 Content Map 及其下游 authoring 产物；runner 的 analysis variant 同时包含该版本，因此默认流程不会混用旧契约。
