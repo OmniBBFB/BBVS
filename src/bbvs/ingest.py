@@ -5,9 +5,29 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .io import write_json
-from .process import require_executable, run
 from .archive import archive_run
+from .io import write_json
+from .media import probe
+from .process import require_executable, run
+
+
+DURATION_TOLERANCE_SECONDS = 1.0
+
+
+def _validate_duration(media: Path, metadata_duration: Any) -> None:
+    try:
+        expected = float(metadata_duration)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("yt-dlp 元数据缺少有效的视频时长，无法校验下载完整性") from exc
+    actual = probe(media).duration
+    if actual is None:
+        raise RuntimeError(f"ffprobe 无法读取下载视频的真实时长: {media}")
+    if abs(actual - expected) > DURATION_TOLERANCE_SECONDS:
+        raise RuntimeError(
+            "下载视频时长与元数据不一致: "
+            f"元数据 {expected:.3f} 秒，真实文件 {actual:.3f} 秒，"
+            f"允许误差 {DURATION_TOLERANCE_SECONDS:.3f} 秒"
+        )
 
 
 def download(
@@ -54,6 +74,7 @@ def download(
     )
     if media is None:
         raise RuntimeError("yt-dlp 已完成，但无法定位下载的视频文件")
+    _validate_duration(media, metadata.get("duration"))
     compact = {
         key: metadata.get(key)
         for key in (
