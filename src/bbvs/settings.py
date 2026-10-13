@@ -56,8 +56,14 @@ class AuthoringSettings:
     max_units_per_map: int = 4
     max_candidate_frames_per_request: int = 12
     selected_frames_per_request: int = 3
+    visual_sample_interval: float = 3.0
+    visual_attempts: int = 2
+    document_review_rounds: int = 2
+    visual_max_candidates: int = 120
 
     def __post_init__(self) -> None:
+        if self.visual_sample_interval <= 0 or self.visual_attempts < 1 or self.document_review_rounds < 0 or self.visual_max_candidates < 2:
+            raise ValueError("invalid teaching document sampling/review settings")
         if self.evidence_window_seconds <= 0:
             raise ValueError("authoring.evidence_window_seconds 必须为正数")
         if self.max_units_per_map < 1:

@@ -11,7 +11,7 @@ from .errors import DependencyError
 from .io import read_json
 from .markdown_artifacts import load_text_chapters
 
-REPORT_VERSION = "vlm-verified-visuals-v2"
+REPORT_VERSION = "teaching-document-v4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +36,13 @@ class WeasyPrintRenderer:
 
 def _load(path: Path, default: Any) -> Any:
     return read_json(path) if path.exists() else default
+
+
+def _report_transcript(run_dir, analysis, transcript_path):
+    from .artifacts import find_inputs
+    candidates = [analysis / "verified-transcript.json"]
+    candidates += [transcript_path] if transcript_path else find_inputs(run_dir, "asr", "transcript.json", "asr-*.json")
+    return next((_load(path, {}) for path in candidates if path.exists()), {})
 
 
 def _time(seconds: float | int | None) -> str:
@@ -229,6 +236,8 @@ def build_html(
     source = run_dir / "source"
     analysis = analysis_dir or run_dir / "analysis"
     metadata = _load(source / "metadata.json", {})
+    teaching_path = analysis / "teaching-document.json"
+    teaching = read_json(teaching_path) if teaching_path.exists() else None
     report_text_path = analysis / "report.txt"
     report_markdown_path = analysis / "report.md"
     summary = _load(analysis / "summary.json", {})
@@ -246,8 +255,8 @@ def build_html(
     corrections = _load(analysis / "corrections.json", [])
     timeline = _load(analysis / "timeline.json", [])
     expected_stages = [
-        ("全局摘要", report_text_path.exists() or report_markdown_path.exists() or bool(summary)),
-        ("章节摘要", bool(chapters)),
+        ("全局摘要", bool(teaching and teaching.get("synthesis")) or report_text_path.exists() or report_markdown_path.exists() or bool(summary)),
+        ("章节摘要", bool(teaching and teaching.get("chapters")) or bool(chapters)),
         ("转录校正", (analysis / "verified-transcript.json").exists()),
     ]
     if options.expect_vision:
@@ -282,6 +291,16 @@ def build_html(
     chapters_html = ""
     if chapters:
         chapters_html = "<h2>章节</h2>" + "".join(_chapter_html(row, url) for row in chapters)
+    if teaching is not None:
+        from .teaching_document import render_html
+        summary_html = ""
+        chapters_html = render_html(teaching)
+        if teaching.get("status") == "partial":
+            review = _load(analysis / "document-review.json", {})
+            reasons = [row.get("reason", "未解决视觉需求") for row in teaching.get("unresolved", [])]
+            reasons += [row.get("reason", "未解决审查问题") for row in review.get("issues", [])]
+            warning += '<div class="warning">部分视觉需求或审查问题尚未解决。<ul>' + "".join(
+                f"<li>{_text(reason)}</li>" for reason in reasons) + '</ul></div>'
 
     term_rows = "".join(
         f'<tr><td>{_text(row.get("canonical_name"))}</td><td>{_text(row.get("category"))}</td>'
@@ -317,9 +336,7 @@ def build_html(
 
     transcript_html = ""
     if options.include_transcript:
-        candidates = [analysis / "verified-transcript.json"]
-        candidates += [transcript_path] if transcript_path else sorted(run_dir.glob("asr-*.json"))
-        transcript = next((_load(path, {}) for path in candidates if path.exists()), {})
+        transcript = _report_transcript(run_dir, analysis, transcript_path)
         rows = "".join(
             f'<p><span class="time">{_timestamp_link(url, row.get("start", 0))}</span> {_text(row.get("text"))}</p>'
             for row in transcript.get("segments", [])
@@ -338,6 +355,24 @@ def export_report(
     renderer: PdfRenderer | None = None, *, analysis_dir: Path | None = None,
     transcript_path: Path | None = None, frames_path: Path | None = None,
 ) -> Path:
+    if output.suffix.lower() == ".tex":
+        from .latex_renderer import export
+        analysis = analysis_dir or run_dir / "analysis"
+        teaching = read_json(analysis / "teaching-document.json")
+        appendices = []
+        for title, name, fields in (("术语表", "terminology.json", ("canonical_name", "category")),
+                                    ("转录校正", "corrections.json", ("start", "original", "corrected"))):
+            rows = _load(analysis / name, [])
+            if rows:
+                appendices.append({"title": title, "text": "\n".join(" · ".join(str(row.get(f, "")) for f in fields) for row in rows)})
+        if options.include_transcript:
+            transcript = _report_transcript(run_dir, analysis, transcript_path)
+            rows = transcript.get("segments", [])
+            if rows:
+                appendices.append({"title": "完整转录", "text": "\n".join(
+                    f"{_time(row.get('start'))} {row.get('text', '')}" for row in rows)})
+        teaching["appendices"] = appendices
+        return export(teaching, output)
     document = build_html(
         run_dir, options, analysis_dir=analysis_dir,
         transcript_path=transcript_path, frames_path=frames_path,

@@ -18,6 +18,7 @@ from .report import REPORT_VERSION, ReportOptions, export_report
 from .settings import AppSettings, RetrySettings
 from .summarize import SUMMARY_PROMPT_VERSION
 from .authoring import AUTHORING_PROMPT_VERSION
+from .teaching_cache import fingerprint, figure_dependencies
 
 Progress = Callable[[str], None]
 Sleeper = Callable[[float], None]
@@ -165,7 +166,7 @@ class KeyframesStage(PipelineStage):
         settings = context.settings.keyframes
         frames_dir = step_dir(
             context.require("run_dir"), "keyframes",
-            f"threshold-{settings.threshold}-max-{settings.max_frames}", asdict(settings),
+            f"threshold-{settings.threshold}-max-{settings.max_frames}", {**asdict(settings), "baseline_sampling": "60s-v1"},
         )
         frames_path = frames_dir / "keyframes.json"
         context.frames_dir, context.frames_path = frames_dir, frames_path
@@ -276,7 +277,24 @@ class ReportStage(PipelineStage):
             return
         context.progress("[7/7] 导出报告")
         analysis_dir = context.require("analysis_dir")
-        config = {"analysis": analysis_dir.name, "renderer": REPORT_VERSION, **asdict(settings.report)}
+        inputs = {name: read_json(analysis_dir / name) for name in ("teaching-document.json", "terminology.json", "corrections.json", "verified-transcript.json")
+                  if (analysis_dir / name).exists()}
+        for name in ("report.txt", "report.md", "chapters-manifest.json", "visual-analysis.json"):
+            if (analysis_dir / name).exists():
+                inputs[name] = (analysis_dir / name).read_text(encoding="utf-8")
+        if "teaching-document.json" in inputs:
+            inputs["figure_assets"] = figure_dependencies(inputs["teaching-document.json"].get("figures", []))
+            cover = inputs["teaching-document.json"].get("cover_path")
+            if cover and Path(cover).is_file():
+                inputs["cover_asset"] = figure_dependencies([{"path": cover}])
+        metadata_path = context.require("run_dir") / "source/metadata.json"
+        if metadata_path.exists():
+            inputs["metadata"] = read_json(metadata_path)
+        asr_path = context.require("asr_path")
+        if settings.report.include_transcript and asr_path.exists():
+            inputs["transcript"] = read_json(asr_path)
+        config = {"analysis": analysis_dir.name, "input_key": fingerprint(inputs),
+                  "renderer": REPORT_VERSION, **asdict(settings.report)}
         report_dir = context.require("run_dir") / "reports" / variant(analysis_dir.name, config)
         report_path = report_dir / settings.report.filename
         if report_path.exists():

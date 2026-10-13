@@ -1,5 +1,22 @@
 # BBVS
 
+教学笔记模式由默认 Authoring 流水线生成 `teaching-document.json`：正文内图片、教学提示块、章节小结和最终综合共享结构化文档。启用 `analysis.vision: true` 时，视觉请求从原视频局部密集抽帧，由 VLM 比较完整性、相关性与可读性，并复核裁剪。公式与代码仅保留课件截图，不做自动转写。
+
+新增 `authoring` 配置：
+
+```yaml
+visual_sample_interval: 3.0
+visual_attempts: 2
+visual_max_candidates: 120
+document_review_rounds: 2
+```
+
+候选上限按单个请求分配；长窗口分层采样，整个视频不设固定图数。独立审查使用原始证据检查内容与教学结构，最多两轮定向修订；未解决视觉需求或 error 留下 `partial` 文档及 `document-review.json`。旧报告格式仍可读取。
+
+审查可补充遗漏段落、重排章节和重新选图，修复后再次检查。计划、正文块和审查修订有独立检查点；图片变化只重跑关联解释，其他章节继续复用。修订后的教学大纲保存为 `teaching-outline.json`，综合在修复之后生成。新版报告保留元数据、术语、校正附录与 `include_transcript` 选项；改变导出格式仅重新渲染。
+
+将 `report.filename` 设置为 `notes.tex` 可导出完整 LaTeX 源文件和同目录配套图片；无需 LaTeX 环境，不安装或调用编译器。HTML/PDF 继续沿用原配置。
+
 设计与维护文档分为三层：
 
 - [`INTENT.md`](INTENT.md)：产品目标、优先级与取舍。

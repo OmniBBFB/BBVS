@@ -41,6 +41,7 @@ def download(
             yt_dlp,
             "--no-playlist",
             "--write-info-json",
+            "--write-thumbnail",
             "--write-subs",
             "--write-auto-subs",
             "--convert-subs",
@@ -102,6 +103,8 @@ def download(
         for language, details in requested_subtitles.items()
         if language in manual_languages or language in automatic_languages
     ]
+    cover = next((p for p in sorted(output_dir.glob("source.*")) if p.suffix.lower() in {".jpg", ".png", ".webp"}), None)
+    compact["cover_filename"] = cover.name if cover else None
     write_json(output_dir / "metadata.json", compact)
     return media.resolve(), compact
 

@@ -45,7 +45,20 @@ def extract_keyframes(
         if match:
             timestamps.append(float(match.group("time")))
     paths = sorted(output_dir.glob("frame_*.jpg"))
-    return [
+    frames = [
         Frame(path=str(path.resolve()), timestamp=timestamps[index] if index < len(timestamps) else 0.0)
         for index, path in enumerate(paths)
     ]
+    # Low-frequency samples cover static slides and the tail after the scene cap.
+    baseline = run([ffmpeg, "-hide_banner", "-i", str(video), "-vf",
+                    "select='isnan(prev_selected_t)+gte(t-prev_selected_t,60)',showinfo",
+                    "-fps_mode", "vfr", "-q:v", "2", "-y", str(output_dir / "baseline_%06d.jpg")])
+    times = []
+    for line in baseline.stderr.splitlines():
+        match = _PTS_ONLY.search(line) if "showinfo" in line else None
+        if match:
+            times.append(float(match.group("time")))
+    for index, path in enumerate(sorted(output_dir.glob("baseline_*.jpg"))):
+        if index < len(times):
+            frames.append(Frame(path=str(path.resolve()), timestamp=times[index]))
+    return sorted(frames, key=lambda frame: frame.timestamp)

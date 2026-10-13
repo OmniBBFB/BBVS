@@ -177,6 +177,9 @@ def test_analysis_resumes_nested_knowledge_items_from_content_map_cache(tmp_path
     pipeline.llm = FakeChat([
         "标题：复合连续性\n\n核心知识：连续函数的复合仍然连续。",
         {"missing_essential": [], "distortions": [], "unsupported_claims": [], "coherence_issues": []},
+        {"blocks": [{"kind": "summary", "title": "本章小结", "purpose": "总结", "evidence_ids": ["k_001"]}]},
+        "连续函数的复合仍然连续。",
+        {"issues": []},
         "标题：连续性报告\n\n核心知识：复合连续。",
     ])
 
@@ -231,6 +234,9 @@ def test_analysis_rebuilds_authoring_outputs_when_prompt_version_is_stale(tmp_pa
         "标题：核心知识\n\n核心知识：新结论。",
         {"missing_essential": [], "lost_reasoning": [], "distortions": [],
          "unsupported_claims": [], "coherence_issues": []},
+        {"blocks": [{"kind": "summary", "title": "本章小结", "purpose": "总结", "evidence_ids": ["u_0001_k_001"]}]},
+        "核心结论。",
+        {"issues": []},
         "标题：新报告\n\n核心知识：新结论。",
     ])
 

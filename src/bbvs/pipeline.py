@@ -9,7 +9,7 @@ from .io import read_json, write_json, write_text
 from .llm import EmbeddingClient, RerankerClient, create_chat_client
 from .markdown_artifacts import load_text_chapters, write_text_chapters
 from .models import (
-    ContentMap, Correction, EvidenceUnit, Frame, OutlineChapter, OutlineTopic, Term,
+    Chapter, ContentMap, Correction, EvidenceUnit, Frame, OutlineChapter, OutlineTopic, Term,
     TimelineSegment, Transcript, VisualAnalysis,
 )
 from .summarize import summarize_timeline
@@ -24,6 +24,10 @@ from .authoring import (
     select_requested_frames, synthesize,
 )
 from .settings import AuthoringSettings
+from .teaching_document import compose
+from .visual_resolver import resolve, collect_requests
+from .document_review import review as review_document, review_visuals
+from .teaching_cache import fingerprint, figure_dependencies
 
 
 def _terms(payload: list[dict]) -> list[Term]:
@@ -60,11 +64,6 @@ class VideoPipeline:
         analysis_dir = analysis_dir or run_dir / "analysis"
         analysis_dir.mkdir(parents=True, exist_ok=True)
         status_path = analysis_dir / "status.json"
-        if status_path.exists():
-            status = read_json(status_path)
-            authoring_current = status.get("authoring_prompt_version") == AUTHORING_PROMPT_VERSION
-            if status.get("complete") is True and (not (authoring and summarize) or authoring_current):
-                return analysis_dir
         metadata = read_json(run_dir / "source" / "metadata.json")
         transcript_candidates = [transcript_path] if transcript_path else find_inputs(run_dir, "asr", "transcript.json", "asr-*.json")
         ocr_candidates = [frames_path] if frames_path else find_inputs(run_dir, "ocr", "frames.json", "ocr-*.json")
@@ -74,22 +73,56 @@ class VideoPipeline:
             raise ValueError("发现多份 ASR/OCR 产物，请显式指定 transcript_path 和 frames_path")
         transcript = from_dict(read_json(transcript_candidates[0]))
         frames = [Frame(**row) for row in read_json(ocr_candidates[0])]
+        authoring_settings = authoring_settings or AuthoringSettings()
+
+        def current_inputs():
+            artifacts = {name: read_json(analysis_dir / name) for name in ("content-map.json", "outline.json")
+                         if (analysis_dir / name).exists()}
+            doc_path = analysis_dir / "teaching-document.json"
+            figure_state = []
+            if doc_path.exists():
+                saved = read_json(doc_path)
+                if all(Path(f["path"]).is_file() for f in saved.get("figures", [])):
+                    figure_state = figure_dependencies(saved.get("figures", []))
+            return fingerprint({"transcript": read_json(transcript_candidates[0]),
+                "frames": read_json(ocr_candidates[0]), "metadata": metadata,
+                "services": {"llm": [self.services.llm.provider, self.services.llm.base_url, self.services.llm.model],
+                    "vlm": [self.services.vlm.base_url, self.services.vlm.model] if self.services.vlm else None},
+                "flags": [verify, vision, summarize, authoring], "settings": authoring_settings,
+                "version": AUTHORING_PROMPT_VERSION, "artifacts": artifacts, "figures": figure_state})
+
+        if status_path.exists():
+            status = read_json(status_path)
+            outputs_present = (not summarize or (analysis_dir / "report.txt").exists()) and (
+                not (authoring and summarize) or (analysis_dir / "teaching-document.json").exists())
+            if outputs_present and status.get("complete") and status.get("analysis_fingerprint") == current_inputs():
+                return analysis_dir
 
         term_path = analysis_dir / "terminology.json"
-        terms = _terms(read_json(term_path)) if term_path.exists() else discover_terms(metadata, frames, self.llm, self.services.llm.model)
+        term_key = fingerprint({"metadata": metadata, "frames": frames, "model": self.services.llm.model})
+        term_deps = analysis_dir / "terminology-dependencies.json"
+        term_current = term_path.exists() and (not term_deps.exists() or read_json(term_deps).get("key") == term_key)
+        terms = _terms(read_json(term_path)) if term_current else discover_terms(metadata, frames, self.llm, self.services.llm.model)
         write_json(term_path, [asdict(row) for row in terms])
+        write_json(term_deps, {"key": term_key})
 
         if verify:
             verified_path = analysis_dir / "verified-transcript.json"
-            if verified_path.exists():
+            verified_key = fingerprint({"transcript": transcript, "terms": terms, "model": self.services.llm.model})
+            verified_deps = analysis_dir / "verification-dependencies.json"
+            verified_current = not verified_deps.exists() or read_json(verified_deps).get("key") == verified_key
+            if verified_path.exists() and verified_current:
                 transcript = from_dict(read_json(verified_path))
             else:
                 progress_path = analysis_dir / "verification-progress.json"
                 progress = read_json(progress_path) if progress_path.exists() else {}
+                if progress.get("input_key", verified_key) != verified_key:
+                    progress = {}
                 existing_corrections = [Correction(**row) for row in progress.get("corrections", [])]
 
                 def save_verification_progress(processed: int, rows: list[Correction]) -> None:
                     write_json(progress_path, {
+                        "input_key": verified_key,
                         "processed_suspects": processed,
                         "corrections": [asdict(row) for row in rows],
                     })
@@ -102,9 +135,9 @@ class VideoPipeline:
                 )
                 write_json(verified_path, asdict(transcript))
                 write_json(analysis_dir / "corrections.json", [asdict(row) for row in corrections])
+            write_json(verified_deps, {"key": verified_key})
 
         visuals: list[VisualAnalysis] = []
-        authoring_settings = authoring_settings or AuthoringSettings()
         units = []
         content_maps = []
         outline_payload: dict = {}
@@ -119,17 +152,15 @@ class VideoPipeline:
                 authoring_version_path.exists()
                 and read_json(authoring_version_path).get("prompt_version") == AUTHORING_PROMPT_VERSION
             )
-            units = (
-                [EvidenceUnit(**row) for row in read_json(units_path)] if units_path.exists()
-                else build_evidence_units(
-                    transcript, frames, metadata.get("chapters"), authoring_settings.evidence_window_seconds,
-                )
-            )
+            units = build_evidence_units(transcript, frames, metadata.get("chapters"), authoring_settings.evidence_window_seconds)
+            old_units = {row["unit_id"]: row for row in read_json(units_path)} if units_path.exists() else {}
+            changed_units = {u.unit_id for u in units if old_units.get(u.unit_id) != asdict(u)}
             write_json(units_path, [asdict(row) for row in units])
             existing_maps = (
                 [content_map_from_dict(row) for row in read_json(maps_path)]
                 if authoring_cache_current and maps_path.exists() else []
             )
+            existing_maps = [m for m in existing_maps if m.unit_id not in changed_units]
 
             def save_maps(rows: list[ContentMap]) -> None:
                 write_json(maps_path, [asdict(row) for row in rows])
@@ -140,7 +171,11 @@ class VideoPipeline:
                 existing_maps=existing_maps, checkpoint=save_maps,
             )
             save_maps(content_maps)
-            if authoring_cache_current and outline_path.exists():
+            outline_key = fingerprint({"maps": content_maps, "units": units, "metadata": metadata,
+                                       "model": self.services.llm.model})
+            outline_deps = analysis_dir / "outline-dependencies.json"
+            outline_current = not outline_deps.exists() or read_json(outline_deps).get("key") == outline_key
+            if authoring_cache_current and outline_path.exists() and not changed_units and outline_current:
                 outline_payload = read_json(outline_path)
                 outline = [OutlineChapter(
                     title=str(row.get("title", "")), start_unit=str(row.get("start_unit", "")),
@@ -157,6 +192,7 @@ class VideoPipeline:
                     units, content_maps, metadata, self.llm, self.services.llm.model,
                 )
                 write_json(outline_path, outline_payload)
+            write_json(outline_deps, {"key": outline_key})
 
         requested_frames = (
             select_requested_frames(
@@ -181,13 +217,19 @@ class VideoPipeline:
         timeline = build_timeline(transcript, frames, terms, visuals)
         write_json(analysis_dir / "timeline.json", [asdict(row) for row in timeline])
         if summarize and authoring:
-            existing_chapters = load_text_chapters(analysis_dir) if authoring_cache_current else []
+            draft_deps = fingerprint({"maps": content_maps, "outline": outline_payload,
+                                      "model": self.services.llm.model, "units": units})
+            draft_key_path = analysis_dir / "draft-dependencies.json"
+            draft_current = draft_key_path.exists() and read_json(draft_key_path).get("key") == draft_deps
+            existing_chapters = load_text_chapters(analysis_dir) if authoring_cache_current and (draft_current or not draft_key_path.exists()) and not changed_units else []
             save_chapters = lambda rows: write_text_chapters(analysis_dir, rows)
             chapters = draft_chapters(
                 units, content_maps, outline, visuals, self.llm, self.services.llm.model,
                 existing_chapters=existing_chapters, checkpoint=save_chapters,
+                cache_directory=analysis_dir / "draft-cache",
             )
             save_chapters(chapters)
+            write_json(draft_key_path, {"key": draft_deps})
             review_path = analysis_dir / "review.json"
             review_progress_path = analysis_dir / "review-progress.json"
             if not authoring_cache_current or not review_path.exists():
@@ -202,9 +244,73 @@ class VideoPipeline:
                 )
                 write_json(review_path, review)
             summary_path = analysis_dir / "report.txt"
-            if not authoring_cache_current or not summary_path.exists():
-                report = synthesize(chapters, outline_payload, self.llm, self.services.llm.model)
+            requests = collect_requests(units, content_maps, outline)
+            media_candidates = sorted((run_dir / "source").glob("source.*"))
+            video = next((p for p in media_candidates if p.suffix in {".mp4", ".mkv", ".webm"}), None)
+            resolution = {"figures": [], "unresolved": requests}
+            if vision and video and self.vlm:
+                resolution = resolve(requests, video, analysis_dir / "visual-requests", self.vlm, self.services.vlm.model,
+                                     authoring_settings.visual_sample_interval, authoring_settings.visual_attempts,
+                                     authoring_settings.visual_max_candidates)
+            write_json(analysis_dir / "visual-resolution.json", resolution)
+            document = compose(chapters, units, content_maps, resolution["figures"], self.llm,
+                               self.services.llm.model, analysis_dir / "teaching")
+            document["unresolved"] = resolution["unresolved"]
+
+            def repair_figure(local, issue, repair_round):
+                if not vision or not video or not self.vlm:
+                    return False
+                block = next((b for c in local["chapters"] for b in c["blocks"] if b["id"] == issue.get("block_id")), None)
+                old = next((f for f in local["figures"] if block and f["figure_id"] == block.get("figure_id")), None)
+                request_id = old["request_id"] if old else issue.get("request_id")
+                request = next((r for r in requests if r["request_id"] == request_id), None)
+                if request is None:
+                    return False
+                refined = {**request, "repair_reason": issue["reason"], "repair_round": repair_round,
+                           "rejected_timestamps": [old["timestamp"]] if old else []}
+                rerun = resolve([refined], video, analysis_dir / "visual-requests", self.vlm,
+                    self.services.vlm.model, authoring_settings.visual_sample_interval / 2,
+                    authoring_settings.visual_attempts, authoring_settings.visual_max_candidates)
+                if not rerun["figures"]:
+                    return False
+                replacement = rerun["figures"][0]
+                local["figures"] = [f for f in local["figures"] if f["figure_id"] != replacement["figure_id"]] + [replacement]
+                if block is None:
+                    blocks = local["chapters"][0]["blocks"]
+                    position = next((i for i, b in enumerate(blocks) if b["kind"] == "summary"), len(blocks))
+                    blocks.insert(position, {"id": "figure-repair-" + request_id, "kind": "figure", "figure_id": replacement["figure_id"]})
+                return True
+
+            visual_check = (lambda local: review_visuals(local, self.vlm, self.services.vlm.model,
+                analysis_dir / "document-review-cache")) if vision and self.vlm else None
+            document_review = review_document(document, units, self.llm, self.services.llm.model,
+                authoring_settings.document_review_rounds, content_maps,
+                directory=analysis_dir / "document-review-cache", figure_repair=repair_figure,
+                visual_check=visual_check, visual_identity=self.services.vlm.model if vision and self.services.vlm else None)
+            write_json(analysis_dir / "document-review.json", document_review)
+            resolved_ids = {f["request_id"] for f in document["figures"]}
+            document["unresolved"] = [r for r in resolution["unresolved"] if r.get("request", r).get("request_id") not in resolved_ids]
+            document["status"] = "partial" if document["unresolved"] or document_review["status"] == "partial" else "complete"
+            cover_name = metadata.get("cover_filename")
+            document["cover_path"] = str(run_dir / "source" / Path(cover_name).name) if cover_name else None
+            document["title"] = metadata.get("title", "课程笔记")
+            edited_outline = {**outline_payload, "chapters": [{"title": c["title"], "start": c["start"], "end": c["end"],
+                "sections": [{"block_id": b["id"], "title": b.get("title", ""), "kind": b["kind"],
+                              "evidence_ids": b.get("evidence_ids", [])} for b in c["blocks"]]}
+                for c in document["chapters"]]}
+            write_json(analysis_dir / "teaching-outline.json", edited_outline)
+            synthesis_key = fingerprint({"chapters": document["chapters"], "outline": edited_outline,
+                                         "model": self.services.llm.model, "version": AUTHORING_PROMPT_VERSION})
+            synthesis_deps = analysis_dir / "synthesis-dependencies.json"
+            if not summary_path.exists() or not synthesis_deps.exists() or read_json(synthesis_deps).get("key") != synthesis_key:
+                repaired_chapters = [Chapter(c["title"], c["start"], c["end"], "\n\n".join(
+                    b.get("text", "") for b in c["blocks"] if b["kind"] != "figure")) for c in document["chapters"]]
+                report = synthesize(repaired_chapters, edited_outline, self.llm, self.services.llm.model)
                 write_text(summary_path, report + "\n")
+                write_json(synthesis_deps, {"key": synthesis_key})
+            document["synthesis"] = summary_path.read_text(encoding="utf-8")
+            write_json(analysis_dir / "outline-revisions.json", document.get("outline_revisions", []))
+            write_json(analysis_dir / "teaching-document.json", document)
         elif summarize:
             summary_path = analysis_dir / "report.txt"
             summary_mode_path = analysis_dir / "summary-mode.json"
@@ -231,6 +337,9 @@ class VideoPipeline:
                 save_chapters(chapters)
                 write_text(summary_path, report + "\n")
         status = {"complete": True}
+        status["analysis_fingerprint"] = current_inputs()
+        if authoring and summarize:
+            status["complete"] = document["status"] == "complete"
         if authoring and summarize:
             status["authoring_prompt_version"] = AUTHORING_PROMPT_VERSION
         write_json(status_path, status)

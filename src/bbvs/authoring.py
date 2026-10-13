@@ -4,6 +4,9 @@ import json
 from dataclasses import asdict
 from collections.abc import Callable
 from typing import Any
+from pathlib import Path
+from .io import read_json, write_json
+from .teaching_cache import fingerprint
 
 from .errors import BBVSError
 from .llm import ChatModel, parse_json_content
@@ -14,7 +17,7 @@ from .models import (
     KnowledgeRole, OutlineChapter, OutlineTopic, Transcript, VisualAnalysis,
 )
 
-AUTHORING_PROMPT_VERSION = "knowledge-topics-text-v4"
+AUTHORING_PROMPT_VERSION = "knowledge-teaching-v5"
 MAX_TOPICS_PER_CHAPTER = 4
 MAX_REQUIRED_ITEMS_PER_TOPIC = 3
 MAX_SUPPORTING_ITEMS_PER_TOPIC = 2
@@ -179,8 +182,8 @@ def plan_outline(
         "fixed time windows, while keeping every chapter backed by a contiguous source range. Let essential main "
         "knowledge drive the outline. Aggregate repeated or closely related candidate items across units into reader-"
         "level topics; a topic is a synthesis, not a restatement of one sentence. Aim for 2-4 topics per chapter and "
-        f"never exceed {MAX_TOPICS_PER_CHAPTER}. Each topic may cite at most {MAX_REQUIRED_ITEMS_PER_TOPIC} required "
-        f"items as core evidence and at most {MAX_SUPPORTING_ITEMS_PER_TOPIC} supporting items. Supporting items must "
+        "expand these soft targets when needed to preserve reasoning and qualifications. Each topic cites required "
+        "items as core evidence and supporting items as necessary context. Supporting items must "
         "attach to exactly one topic and be selected only when they materially improve understanding. Never select "
         "chatter or optional items. Keep concept_dependencies to at most 12 short strings. Return JSON with "
         "exactly central_question, thesis, concept_dependencies, must_preserve, and chapters. Each chapter uses "
@@ -242,17 +245,11 @@ def _validate_outline(
         if left > right:
             raise ValueError("outline chapter range is reversed")
         covered.extend(ids[left:right + 1])
-        if len(chapter.topics) > MAX_TOPICS_PER_CHAPTER:
-            raise ValueError(f"outline chapter exceeds {MAX_TOPICS_PER_CHAPTER} report topics")
         topic_required = [item_id for topic in chapter.topics for item_id in topic.required_items]
         topic_supporting = [item_id for topic in chapter.topics for item_id in topic.supporting_items]
         for topic in chapter.topics:
             if not topic.title or not topic.summary or not topic.required_items:
                 raise ValueError("every report topic needs title, summary, and required items")
-            if len(topic.required_items) > MAX_REQUIRED_ITEMS_PER_TOPIC:
-                raise ValueError("report topic has too many required items")
-            if len(topic.supporting_items) > MAX_SUPPORTING_ITEMS_PER_TOPIC:
-                raise ValueError("report topic has too many supporting items")
         for item_id in topic_required + topic_supporting:
             if item_id not in item_by_id:
                 raise ValueError(f"outline references an unknown required item: {item_id}")
@@ -294,6 +291,7 @@ def draft_chapters(
     visuals: list[VisualAnalysis], client: ChatModel, model: str,
     existing_chapters: list[Chapter] | None = None,
     checkpoint: Callable[[list[Chapter]], None] | None = None,
+    cache_directory: Path | None = None,
 ) -> list[Chapter]:
     positions = {row.unit_id: index for index, row in enumerate(units)}
     maps_by_id = {row.unit_id: row for row in maps}
@@ -322,6 +320,13 @@ def draft_chapters(
             "content_map_context": map_context,
             "visuals": chapter_visuals,
         }
+        cache_key = fingerprint({"evidence": evidence, "model": model, "version": AUTHORING_PROMPT_VERSION})
+        cache_path = Path(cache_directory) / f"{cache_key}.json" if cache_directory else None
+        if cache_path and cache_path.exists():
+            result.append(Chapter(**read_json(cache_path)))
+            if checkpoint:
+                checkpoint(result)
+            continue
         prompt = (
             "Write a concise Chinese teaching chapter grounded only in this evidence. Treat report_topics as the "
             "complete content plan. Write one coherent explanation per topic by synthesizing its required_items; do not "
@@ -342,6 +347,8 @@ def draft_chapters(
             title=text_title(text, chapter.title), start=source_units[0].start,
             end=source_units[-1].end, summary=text,
         ))
+        if cache_path:
+            write_json(cache_path, asdict(result[-1]))
         if checkpoint:
             checkpoint(result)
     return result

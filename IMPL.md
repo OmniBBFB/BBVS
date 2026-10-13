@@ -4,6 +4,10 @@
 
 ## 当前主链路
 
+2026-10-13 增补：教学计划/正文块与章节审查分别缓存；修复阶段逐项保存进度。审查支持补块、章节结构重排及带反馈的配图重选，最终综合基于修订内容。报告缓存将实际文档和资产计入依赖，新版 HTML/PDF 与 TeX 均恢复术语/校正/可选转录附录。详见 `docs/teaching-document.md`。
+
+新增 `visual_resolver`、`teaching_document`、`document_review`、`latex_renderer`；旧章节写作仍提供初稿，再生成短块计划与独立长正文，并执行原证据审查和有限修订。视觉失败以及无法修复的问题保留 partial。详细字段、缓存与当前限制见 `docs/teaching-document.md`。旧版四主题/三核心证据/两辅助证据上限已改为 prompt 软目标。
+
 默认 `run` interface 只接收 BV 号。`runner.resolve_run_dir` 在内部隐藏标题目录查找：唯一匹配时续跑，
 没有匹配时由 DownloadStage 构造 Bilibili URL；调用者不需要知道运行目录名。
 
