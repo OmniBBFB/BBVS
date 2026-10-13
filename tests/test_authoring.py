@@ -163,16 +163,36 @@ def test_outline_rejects_optional_chatter_as_required_content() -> None:
             "课堂闲聊",
         ),
     ])]
-    client = FakeChat([{"chapters": [{
+    invalid_outline = {"chapters": [{
         "title": "主题", "start_unit": "u_0001", "end_unit": "u_0001",
         "visual_requests": [], "topics": [{
             "title": "主题", "summary": "核心结论", "required_items": ["k_core"],
             "supporting_items": ["k_chat"],
         }],
-    }]}])
+    }]}
+    client = FakeChat([invalid_outline, invalid_outline])
 
     with pytest.raises(ValueError, match="optional or chatter"):
         plan_outline(units, maps, {}, client, "m")
+
+
+def test_outline_retries_when_model_selects_optional_item() -> None:
+    units = build_evidence_units(transcript(), [], target_seconds=240)
+    maps = [ContentMap("u_0001", knowledge_items=[
+        KnowledgeItem("k_core", "核心结论", KnowledgeControl(
+            KnowledgeForm.PROPOSITION, KnowledgeRole.MAIN, KnowledgeImportance.ESSENTIAL)),
+        KnowledgeItem("u_0005_k14", "闲聊", KnowledgeControl(
+            KnowledgeForm.CONTEXT, KnowledgeRole.CHATTER, KnowledgeImportance.OPTIONAL)),
+    ])]
+    base = {"title": "主题", "start_unit": "u_0001", "end_unit": "u_0001",
+            "topics": [{"title": "主题", "summary": "核心结论",
+                        "required_items": ["k_core"], "supporting_items": ["u_0005_k14"]}]}
+    corrected = {**base, "topics": [{**base["topics"][0], "supporting_items": []}]}
+    client = FakeChat([{"chapters": [base]}, {"chapters": [corrected]}])
+
+    _, chapters = plan_outline(units, maps, {}, client, "m")
+
+    assert chapters[0].topics[0].supporting_items == []
 
 
 def test_outline_required_items_are_anchors_not_all_essential_content() -> None:

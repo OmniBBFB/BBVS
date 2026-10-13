@@ -191,12 +191,14 @@ def plan_outline(
         + json.dumps({"metadata": metadata, "units": unit_ranges,
                       "content_maps": [asdict(row) for row in maps]}, ensure_ascii=False)
     )
-    payload = parse_json_content(client.chat(
-        model=model, messages=[{"role": "system", "content": "You are the lead editor of a rigorous course note."},
-                               {"role": "user", "content": prompt}],
-        max_tokens=8192, response_format={"type": "json_object"},
-    ))
-    chapters = [OutlineChapter(
+    messages = [{"role": "system", "content": "You are the lead editor of a rigorous course note."},
+                {"role": "user", "content": prompt}]
+    for attempt in range(2):
+        payload = parse_json_content(client.chat(
+            model=model, messages=messages, max_tokens=8192,
+            response_format={"type": "json_object"},
+        ))
+        chapters = [OutlineChapter(
         title=str(row.get("title", "")), start_unit=str(row.get("start_unit", "")),
         end_unit=str(row.get("end_unit", "")), teaching_goal=str(row.get("teaching_goal", "")),
         topics=[OutlineTopic(
@@ -205,9 +207,19 @@ def plan_outline(
             supporting_items=[str(value) for value in topic.get("supporting_items", [])],
         ) for topic in row.get("topics", []) if isinstance(topic, dict)],
         visual_requests=[value for value in row.get("visual_requests", []) if isinstance(value, dict)],
-    ) for row in payload.get("chapters", [])]
-    _validate_outline(units, maps, chapters)
-    return payload, chapters
+        ) for row in payload.get("chapters", [])]
+        try:
+            _validate_outline(units, maps, chapters)
+        except ValueError as exc:
+            if attempt or not str(exc).startswith("optional or chatter item cannot be required:"):
+                raise
+            messages.extend([
+                {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)},
+                {"role": "user", "content": f"The outline failed validation: {exc}. Correct the outline and return the complete JSON again. Do not select optional or chatter items in required_items or supporting_items."},
+            ])
+        else:
+            return payload, chapters
+    raise AssertionError("outline retry loop exhausted")
 
 
 def _validate_outline(
